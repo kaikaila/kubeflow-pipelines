@@ -339,8 +339,6 @@ func addDisplayNameColumn(db *gorm.DB, quotedTableName string, driverName string
 
 	glog.Info("Adding DisplayName column to " + quotedTableName)
 
-	var err error
-
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var stmts []string
 		switch driverName {
