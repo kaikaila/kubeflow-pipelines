@@ -26,12 +26,7 @@ import (
 	"github.com/cenkalti/backoff"
 	mysqlStd "github.com/go-sql-driver/mysql"
 	"github.com/golang/glog"
-	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/sqlite"
-
 	_ "github.com/jackc/pgx/stdlib"
-	_ "github.com/jinzhu/gorm/dialects/postgres"
-
 	"github.com/kubeflow/pipelines/backend/src/apiserver/archive"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/auth"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/client"
@@ -44,6 +39,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -422,14 +418,35 @@ func InitDBClient(initConnectionTimeout time.Duration) *storage.DB {
 
 	// db is safe for concurrent use by multiple goroutines
 	// and maintains its own pool of idle connections.
-	db, err := gorm.Open(dialector, &gorm.Config{})
+	db, err := gorm.Open(dialector, &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{
+			// Preserve original struct field names without converting to snake case.
+			NoLowerCase: true,
+		},
+	})
+
 	util.TerminateIfError(err)
 
 	// If pipeline_versions table is introduced into DB for the first time,
 	// it needs initialization or data backfill.
 	var tableNames []string
 	initializePipelineVersions := true
-	db.Raw(`show tables`).Pluck("Tables_in_mlpipeline", &tableNames)
+
+	switch driverName {
+	case "mysql":
+		// MySQL: SHOW TABLES returns column "Tables_in_mlpipeline"
+		db.Raw(`SHOW TABLES`).Pluck("Tables_in_mlpipeline", &tableNames)
+	case "pgx":
+		// Postgres: query information_schema for public tables
+		db.Raw(`
+			SELECT table_name
+			FROM information_schema.tables
+			WHERE table_schema = 'public'
+		`).Pluck("table_name", &tableNames)
+	default:
+		glog.Fatalf("Unsupported driver for table detection: %s", driverName)
+	}
+
 	for _, tableName := range tableNames {
 		if tableName == "pipeline_versions" {
 			initializePipelineVersions = false

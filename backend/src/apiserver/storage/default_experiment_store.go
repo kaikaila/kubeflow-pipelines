@@ -65,6 +65,7 @@ func (s *DefaultExperimentStore) initializeDefaultExperimentTable() error {
 			return util.NewInternalServerError(queryErr, "Error creating query to initialize default experiment table")
 		}
 
+		glog.Infof("Initializing default_experiments table with SQL: %s; args: %v", sql, args)
 		_, err = tx.Exec(sql, args...)
 		if err != nil {
 			tx.Rollback()
@@ -88,6 +89,7 @@ func (s *DefaultExperimentStore) SetDefaultExperimentId(id string) error {
 	if err != nil {
 		return util.NewInternalServerError(err, "Error creating query to set default experiment ID")
 	}
+	glog.Infof("Setting default experiment ID with SQL: %s; args: %v", sql, args)
 	_, err = s.db.Exec(sql, args...)
 	if err != nil {
 		return util.NewInternalServerError(err, "Error setting default experiment ID")
@@ -97,7 +99,7 @@ func (s *DefaultExperimentStore) SetDefaultExperimentId(id string) error {
 
 func (s *DefaultExperimentStore) GetDefaultExperimentId() (string, error) {
 	var defaultExperimentId string
-	sql, args, err := sq.Select("DefaultExperimentId").From("default_experiments").ToSql()
+	sql, args, err := sq.Select(`"DefaultExperimentId"`).From("default_experiments").ToSql()
 	if err != nil {
 		return "", util.NewInternalServerError(err, "Error creating query to get default experiment ID")
 	}
