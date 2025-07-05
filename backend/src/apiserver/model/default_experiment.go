@@ -15,5 +15,6 @@
 package model
 
 type DefaultExperiment struct {
-	DefaultExperimentId string `gorm:"column:DefaultExperimentId; not null; primary_key;"`
+	//nolint:staticcheck // allow legacy constant name
+	DefaultExperimentId string `gorm:"column:DefaultExperimentId; not null; primaryKey;"`
 }
