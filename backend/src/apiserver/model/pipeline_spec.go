@@ -14,6 +14,11 @@
 
 package model
 
+import (
+	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
+)
+
 type PipelineSpec struct {
 	// Parent pipeline's id.
 	PipelineId string `gorm:"column:PipelineId; not null;"`
@@ -30,11 +35,11 @@ type PipelineSpec struct {
 	// Stored as longtext to support large manifests (up to 4GB in MySQL).
 	// https://dev.mysql.com/doc/refman/8.0/en/blob.html
 	// TODO(kaikaila): consider enforcing a soft limit if needed for performance.
-	PipelineSpecManifest string `gorm:"column:PipelineSpecManifest; type:longtext;"`
+	PipelineSpecManifest string `gorm:"column:PipelineSpecManifest;"`
 
 	// Argo workflow YAML definition. This is the Argo Spec converted from Pipeline YAML.
 	// This is deprecated. Use the pipeline ID, pipeline version ID, or pipeline spec manifest.
-	WorkflowSpecManifest string `gorm:"column:WorkflowSpecManifest; type:longtext;"`
+	WorkflowSpecManifest string `gorm:"column:WorkflowSpecManifest;"`
 
 	// Store parameters key-value pairs as serialized string.
 	// This field is only used for V1 API. For V2, use the `Parameters` field in RuntimeConfig.
@@ -45,4 +50,12 @@ type PipelineSpec struct {
 
 	// Runtime config of the pipeline, only used for v2 template in API v1beta1 API.
 	RuntimeConfig
+}
+
+func (PipelineSpec) GormDBDataType(db *gorm.DB, field *schema.Field) string {
+	switch field.Name {
+	case "PipelineSpecManifest", "WorkflowSpecManifest", "Parameters":
+		return LongTextByDialect(db)
+	}
+	return ""
 }

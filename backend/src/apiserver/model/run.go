@@ -16,6 +16,9 @@ package model
 
 import (
 	"strings"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 type (
@@ -326,6 +329,14 @@ type RunDetails struct {
 	PipelineContextId       int64  `gorm:"column:PipelineContextId; default:0;"`
 	PipelineRunContextId    int64  `gorm:"column:PipelineRunContextId; default:0;"`
 	TaskDetails             []*Task
+}
+
+func (RunDetails) GormDBDataType(db *gorm.DB, field *schema.Field) string {
+	switch field.Name {
+	case "PipelineRuntimeManifest", "WorkflowRuntimeManifest":
+		return LongTextByDialect(db)
+	}
+	return ""
 }
 
 type RunMetric struct {
