@@ -17,12 +17,17 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/golang/glog"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/list"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/model"
 	"github.com/kubeflow/pipelines/backend/src/common/util"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 type ExperimentStoreInterface interface {
@@ -240,30 +245,32 @@ func (s *ExperimentStore) CreateExperiment(experiment *model.Experiment) (*model
 		return nil, util.NewInvalidInputError("Invalid value for StorageState field: %q", newExperiment.StorageState)
 	}
 
-	sql, args, err := sq.
-		Insert("experiments").
-		SetMap(sq.Eq{
-			"UUID":                  newExperiment.UUID,
-			"CreatedAtInSec":        newExperiment.CreatedAtInSec,
-			"LastRunCreatedAtInSec": newExperiment.LastRunCreatedAtInSec,
-			"Name":                  newExperiment.Name,
-			"Description":           newExperiment.Description,
-			"Namespace":             newExperiment.Namespace,
-			"StorageState":          newExperiment.StorageState.ToV2().ToString(),
-		}).
-		ToSql()
-	if err != nil {
-		return nil, util.NewInternalServerError(err, "Failed to create query to insert experiment to experiment table: %v",
-			err.Error())
+	// Construct a GORM DB from the underlying *sql.DB and configured SQLDialect.
+	sqlDB := s.db.DB
+	var gormDB *gorm.DB
+	var openErr error
+	switch s.db.SQLDialect.(type) {
+	case PostgreDialect:
+		dialector := postgres.New(postgres.Config{Conn: sqlDB})
+		gormDB, openErr = gorm.Open(dialector, &gorm.Config{})
+	case MySQLDialect:
+		dialector := mysql.New(mysql.Config{Conn: sqlDB})
+		gormDB, openErr = gorm.Open(dialector, &gorm.Config{})
+	case SQLiteDialect:
+		dialector := sqlite.New(sqlite.Config{Conn: sqlDB})
+		gormDB, openErr = gorm.Open(dialector, &gorm.Config{})
+	default:
+		return nil, util.NewInternalServerError(fmt.Errorf("unsupported SQL dialect"), "Failed to add experiment to experiment table")
 	}
-	_, err = s.db.Exec(sql, args...)
-	if err != nil {
-		if s.db.IsDuplicateError(err) {
+	if openErr != nil {
+		return nil, util.NewInternalServerError(openErr, "Failed to open GORM DB")
+	}
+	if err := gormDB.Create(&newExperiment).Error; err != nil {
+		if gormDB.Name() == "postgres" && strings.Contains(err.Error(), "duplicate key") || s.db.IsDuplicateError(err) {
 			return nil, util.NewAlreadyExistError(
 				"Failed to create a new experiment. The name %v already exists. Please specify a new name", experiment.Name)
 		}
-		return nil, util.NewInternalServerError(err, "Failed to add experiment to experiment table: %v",
-			err.Error())
+		return nil, util.NewInternalServerError(err, "Failed to add experiment to experiment table")
 	}
 	return &newExperiment, nil
 }

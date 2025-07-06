@@ -571,7 +571,17 @@ func InitDBClient(initConnectionTimeout time.Duration) *storage.DB {
 	if err != nil {
 		glog.Fatalf("Failed to retrieve *sql.DB from gorm.DB. Error: %v", err)
 	}
-	return storage.NewDB(newdb, storage.NewMySQLDialect())
+	// Select SQLDialect based on driverName
+	var dialect storage.SQLDialect
+	switch driverName {
+	case "pgx", "postgres":
+		dialect = storage.NewPostgreDialect()
+	case "sqlite", "sqlite3":
+		dialect = storage.NewSQLiteDialect()
+	default:
+		dialect = storage.NewMySQLDialect()
+	}
+	return storage.NewDB(newdb, dialect)
 }
 
 // Initializes Database driver. Use `driverName` to indicate which type of DB to use:

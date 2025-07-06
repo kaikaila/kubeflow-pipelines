@@ -22,6 +22,7 @@ import (
 
 	"github.com/VividCortex/mysqlerr"
 	"github.com/go-sql-driver/mysql"
+	"github.com/lib/pq"
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
@@ -148,6 +149,63 @@ func NewMySQLDialect() MySQLDialect {
 
 func NewSQLiteDialect() SQLiteDialect {
 	return SQLiteDialect{}
+}
+
+func NewPostgreDialect() PostgreDialect {
+	return PostgreDialect{}
+}
+
+// PostgreDialect implements SQLDialect for PostgreSQL.
+type PostgreDialect struct{}
+
+func (d PostgreDialect) GroupConcat(expr string, separator string) string {
+	if separator != "" {
+		return fmt.Sprintf("STRING_AGG(%s, '%s')", expr, separator)
+	}
+	// Default to comma when no separator provided.
+	return fmt.Sprintf("STRING_AGG(%s, ',')", expr)
+}
+
+func (d PostgreDialect) Concat(exprs []string, separator string) string {
+	if separator != "" {
+		return strings.Join(exprs, fmt.Sprintf("||'%s'||", separator))
+	}
+	return strings.Join(exprs, "||")
+}
+
+func (d PostgreDialect) IsDuplicateError(err error) bool {
+	if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+		return true
+	}
+	return false
+}
+
+func (d PostgreDialect) SelectForUpdate(query string) string {
+	return query + " FOR UPDATE"
+}
+
+func (d PostgreDialect) Upsert(query string, key string, overwrite bool, columns ...string) string {
+	return fmt.Sprintf("%s ON CONFLICT(%s) DO UPDATE SET %s", query, key, prepareUpdateSuffixPostgres(columns, overwrite))
+}
+
+func (d PostgreDialect) UpdateWithJointOrFrom(targetTable, joinTable, setClause, joinClause, whereClause string) string {
+	// PostgreSQL uses UPDATE ... SET ... FROM ... syntax.
+	return fmt.Sprintf("UPDATE %s SET %s FROM %s WHERE %s AND %s", targetTable, setClause, joinTable, joinClause, whereClause)
+}
+
+// prepareUpdateSuffixPostgres constructs the SET clause for PostgreSQL upsert.
+func prepareUpdateSuffixPostgres(columns []string, overwrite bool) string {
+	columnsExtended := make([]string, 0)
+	if overwrite {
+		for _, c := range columns {
+			columnsExtended = append(columnsExtended, fmt.Sprintf("%s = EXCLUDED.%s", c, c))
+		}
+	} else {
+		for _, c := range columns {
+			columnsExtended = append(columnsExtended, fmt.Sprintf("%s = %s", c, c))
+		}
+	}
+	return strings.Join(columnsExtended, ",")
 }
 
 func prepareUpdateSuffixMySQL(columns []string, overwrite bool) string {
