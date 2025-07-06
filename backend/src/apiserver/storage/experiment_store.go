@@ -17,18 +17,16 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/golang/glog"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/list"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/model"
 	"github.com/kubeflow/pipelines/backend/src/common/util"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
+
+// sqBuilder is a Squirrel StatementBuilder configured for PostgreSQL placeholders.
+var sqBuilder = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
 type ExperimentStoreInterface interface {
 	CreateExperiment(*model.Experiment) (*model.Experiment, error)
@@ -67,7 +65,7 @@ func (s *ExperimentStore) ListExperiments(filterContext *model.FilterContext, op
 	}
 
 	// SQL for getting the filtered and paginated rows
-	sqlBuilder := sq.Select(experimentColumns...).From("experiments")
+	sqlBuilder := sqBuilder.Select(experimentColumns...).From("experiments")
 	if filterContext.ReferenceKey != nil && filterContext.ReferenceKey.Type == model.NamespaceResourceType {
 		sqlBuilder = sqlBuilder.Where(sq.Eq{"Namespace": filterContext.ReferenceKey.ID})
 	}
@@ -80,7 +78,7 @@ func (s *ExperimentStore) ListExperiments(filterContext *model.FilterContext, op
 
 	// SQL for getting total size. This matches the query to get all the rows above, in order
 	// to do the same filter, but counts instead of scanning the rows.
-	sqlBuilder = sq.Select("count(*)").From("experiments")
+	sqlBuilder = sqBuilder.Select("count(*)").From("experiments")
 	if filterContext.ReferenceKey != nil && filterContext.ReferenceKey.Type == model.NamespaceResourceType {
 		sqlBuilder = sqlBuilder.Where(sq.Eq{"Namespace": filterContext.ReferenceKey.ID})
 	}
@@ -143,7 +141,7 @@ func (s *ExperimentStore) ListExperiments(filterContext *model.FilterContext, op
 }
 
 func (s *ExperimentStore) GetExperiment(uuid string) (*model.Experiment, error) {
-	sql, args, err := sq.
+	sql, args, err := sqBuilder.
 		Select(experimentColumns...).
 		From("experiments").
 		Where(sq.Eq{"uuid": uuid}).
@@ -169,7 +167,7 @@ func (s *ExperimentStore) GetExperiment(uuid string) (*model.Experiment, error) 
 }
 
 func (s *ExperimentStore) GetExperimentByNameNamespace(name string, namespace string) (*model.Experiment, error) {
-	sql, args, err := sq.
+	sql, args, err := sqBuilder.
 		Select(experimentColumns...).
 		From("experiments").
 		Where(sq.Eq{
@@ -229,8 +227,6 @@ func (s *ExperimentStore) CreateExperiment(experiment *model.Experiment) (*model
 	newExperiment := *experiment
 	now := s.time.Now().Unix()
 	newExperiment.CreatedAtInSec = now
-	// When an experiment has no runs
-	// we default to "1970-01-01T00:00:00Z"
 	newExperiment.LastRunCreatedAtInSec = 0
 	id, err := s.uuid.NewRandom()
 	if err != nil {
@@ -245,38 +241,37 @@ func (s *ExperimentStore) CreateExperiment(experiment *model.Experiment) (*model
 		return nil, util.NewInvalidInputError("Invalid value for StorageState field: %q", newExperiment.StorageState)
 	}
 
-	// Construct a GORM DB from the underlying *sql.DB and configured SQLDialect.
-	sqlDB := s.db.DB
-	var gormDB *gorm.DB
-	var openErr error
-	switch s.db.SQLDialect.(type) {
-	case PostgreDialect:
-		dialector := postgres.New(postgres.Config{Conn: sqlDB})
-		gormDB, openErr = gorm.Open(dialector, &gorm.Config{})
-	case MySQLDialect:
-		dialector := mysql.New(mysql.Config{Conn: sqlDB})
-		gormDB, openErr = gorm.Open(dialector, &gorm.Config{})
-	case SQLiteDialect:
-		dialector := sqlite.New(sqlite.Config{Conn: sqlDB})
-		gormDB, openErr = gorm.Open(dialector, &gorm.Config{})
-	default:
-		return nil, util.NewInternalServerError(fmt.Errorf("unsupported SQL dialect"), "Failed to add experiment to experiment table")
+	// Build INSERT SQL with PostgreSQL-compatible placeholders
+	sqlStr, args, err := sqBuilder.
+		Insert("experiments").
+		Columns("UUID", "Name", "Description", "CreatedAtInSec", "LastRunCreatedAtInSec", "Namespace", "StorageState").
+		Values(
+			newExperiment.UUID,
+			newExperiment.Name,
+			newExperiment.Description,
+			newExperiment.CreatedAtInSec,
+			newExperiment.LastRunCreatedAtInSec,
+			newExperiment.Namespace,
+			newExperiment.StorageState.ToV2().ToString(),
+		).
+		ToSql()
+	if err != nil {
+		return nil, util.NewInternalServerError(err, "Failed to create query to insert experiment to experiment table: %v", err)
 	}
-	if openErr != nil {
-		return nil, util.NewInternalServerError(openErr, "Failed to open GORM DB")
-	}
-	if err := gormDB.Create(&newExperiment).Error; err != nil {
-		if gormDB.Name() == "postgres" && strings.Contains(err.Error(), "duplicate key") || s.db.IsDuplicateError(err) {
+	glog.Infof("Raw SQL: %s; args: %v", sqlStr, args)
+	_, err = s.db.Exec(sqlStr, args...)
+	if err != nil {
+		if s.db.IsDuplicateError(err) {
 			return nil, util.NewAlreadyExistError(
 				"Failed to create a new experiment. The name %v already exists. Please specify a new name", experiment.Name)
 		}
-		return nil, util.NewInternalServerError(err, "Failed to add experiment to experiment table")
+		return nil, util.NewInternalServerError(err, "Failed to add experiment to experiment table: %v", err)
 	}
 	return &newExperiment, nil
 }
 
 func (s *ExperimentStore) DeleteExperiment(id string) error {
-	experimentSql, experimentArgs, err := sq.Delete("experiments").Where(sq.Eq{"UUID": id}).ToSql()
+	experimentSQL, experimentArgs, err := sqBuilder.Delete("experiments").Where(sq.Eq{"UUID": id}).ToSql()
 	if err != nil {
 		return util.NewInternalServerError(err,
 			"Failed to create query to delete experiment: %s", id)
@@ -286,7 +281,7 @@ func (s *ExperimentStore) DeleteExperiment(id string) error {
 	if err != nil {
 		return util.NewInternalServerError(err, "Failed to create a new transaction to delete experiment")
 	}
-	_, err = tx.Exec(experimentSql, experimentArgs...)
+	_, err = tx.Exec(experimentSQL, experimentArgs...)
 	if err != nil {
 		tx.Rollback()
 		return util.NewInternalServerError(err, "Failed to delete experiment %s from table", id)
@@ -312,7 +307,7 @@ func (s *ExperimentStore) ArchiveExperiment(expId string) error {
 	// ArchiveExperiment results in
 	// 1. The experiment getting archived
 	// 2. All the runs in the experiment getting archived no matter what previous storage state they are in
-	sql, args, err := sq.
+	sql, args, err := sqBuilder.
 		Update("experiments").
 		SetMap(sq.Eq{
 			"StorageState": model.StorageStateArchived.ToString(),
@@ -334,7 +329,7 @@ func (s *ExperimentStore) ArchiveExperiment(expId string) error {
 		"run_details.UUID = resource_references.ResourceUUID",
 		"resource_references.ResourceType = ? AND resource_references.ReferenceUUID = ? AND resource_references.ReferenceType = ?")
 
-	updateRunsWithExperimentUUIDSql, updateRunsWithExperimentUUIDArgs, err := sq.
+	updateRunsWithExperimentUUIDSql, updateRunsWithExperimentUUIDArgs, err := sqBuilder.
 		Update("run_details").
 		SetMap(sq.Eq{
 			"StorageState": model.StorageStateArchived.ToString(),
@@ -405,7 +400,7 @@ func (s *ExperimentStore) UnarchiveExperiment(expId string) error {
 	// UnarchiveExperiment results in
 	// 1. The experiment getting unarchived
 	// 2. All the archived runs and disabled jobs will stay archived
-	sql, args, err := sq.
+	sql, args, err := sqBuilder.
 		Update("experiments").
 		SetMap(sq.Eq{
 			"StorageState": model.StorageStateAvailable.ToString(),
@@ -429,7 +424,7 @@ func (s *ExperimentStore) UnarchiveExperiment(expId string) error {
 func (s *ExperimentStore) SetLastRunTimestamp(run *model.Run) error {
 	expId := run.ExperimentId
 	// SetLastRunTimestamp results in the experiment getting last_run_created_at updated
-	query, args, err := sq.
+	query, args, err := sqBuilder.
 		Update("experiments").
 		SetMap(sq.Eq{
 			"LastRunCreatedAtInSec": run.CreatedAtInSec,

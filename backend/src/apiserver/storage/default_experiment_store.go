@@ -65,7 +65,6 @@ func (s *DefaultExperimentStore) initializeDefaultExperimentTable() error {
 			return util.NewInternalServerError(queryErr, "Error creating query to initialize default experiment table")
 		}
 
-		glog.Infof("Initializing default_experiments table with SQL: %s; args: %v", sql, args)
 		_, err = tx.Exec(sql, args...)
 		if err != nil {
 			tx.Rollback()
