@@ -111,6 +111,7 @@ func (s *JobStore) ListJobs(
 
 	rows, err := tx.Query(rowsSql, rowsArgs...)
 	if err != nil {
+		glog.Errorf("ListJobs row query failed on table 'jobs': SQL: %s; args: %v; error: %v", rowsSql, rowsArgs, err) // lyk for debug
 		return errorF(err)
 	}
 	if err := rows.Err(); err != nil {
@@ -125,6 +126,7 @@ func (s *JobStore) ListJobs(
 
 	sizeRow, err := tx.Query(sizeSql, sizeArgs...)
 	if err != nil {
+		glog.Errorf("ListJobs count query failed on table 'jobs': SQL: %s; args: %v; error: %v", sizeSql, sizeArgs, err) // lyk for debug
 		tx.Rollback()
 		return errorF(err)
 	}
@@ -159,19 +161,28 @@ func (s *JobStore) buildSelectJobsQuery(selectCount bool, opts *list.Options,
 	var filteredSelectBuilder sq.SelectBuilder
 	var err error
 
+	// Quote job columns per dialect to preserve case in SQL queries
+	quotedJobCols := QuoteColumns(s.db.SQLDialect, jobColumns)
+
 	refKey := filterContext.ReferenceKey
 	if refKey != nil && refKey.Type == model.ExperimentResourceType && (refKey.ID != "" || common.IsMultiUserMode()) {
-		filteredSelectBuilder, err = list.FilterOnExperiment("jobs", jobColumns,
+		filteredSelectBuilder, err = list.FilterOnExperiment("jobs", quotedJobCols,
 			selectCount, refKey.ID)
 	} else if refKey != nil && refKey.Type == model.NamespaceResourceType && (refKey.ID != "" || common.IsMultiUserMode()) {
-		filteredSelectBuilder, err = list.FilterOnNamespace("jobs", jobColumns,
+		// Call FilterOnNamespace, but ignore its unquoted Namespace condition; add quoted below.
+		filteredSelectBuilder, err = list.FilterOnNamespace("jobs", quotedJobCols,
 			selectCount, refKey.ID)
 	} else {
-		filteredSelectBuilder, err = list.FilterOnResourceReference("jobs", jobColumns,
+		filteredSelectBuilder, err = list.FilterOnResourceReference("jobs", quotedJobCols,
 			model.JobResourceType, selectCount, filterContext)
 	}
 	if err != nil {
 		return "", nil, util.NewInternalServerError(err, "Failed to list jobs: %v", err)
+	}
+	// For namespace filtering, replace unquoted condition with quoted identifier
+	if refKey != nil && refKey.Type == model.NamespaceResourceType && (refKey.ID != "" || common.IsMultiUserMode()) {
+		col := QuoteIdentifier(s.db.SQLDialect, "Namespace")
+		filteredSelectBuilder = filteredSelectBuilder.Where(sq.Eq{col: refKey.ID})
 	}
 	sqlBuilder := opts.AddFilterToSelect(filteredSelectBuilder)
 
@@ -179,9 +190,20 @@ func (s *JobStore) buildSelectJobsQuery(selectCount bool, opts *list.Options,
 	// to get resource reference information. Also add pagination.
 	if !selectCount {
 		sqlBuilder = opts.AddPaginationToSelect(sqlBuilder)
+		// sqlBuilder = Paginate(sqlBuilder, opts.PageSize, opts.PageToken)
 		sqlBuilder = s.addResourceReferences(sqlBuilder)
 		sqlBuilder = opts.AddSortingToSelect(sqlBuilder)
 	}
+
+	// Apply dialect-aware placeholder format based on SQLDialect type
+	switch s.db.SQLDialect.(type) {
+	case PostgreDialect:
+		sqlBuilder = sqlBuilder.PlaceholderFormat(sq.Dollar)
+	default:
+		// MySQLDialect, SQLiteDialect, etc.
+		sqlBuilder = sqlBuilder.PlaceholderFormat(sq.Question)
+	}
+
 	sql, args, err := sqlBuilder.ToSql()
 	if err != nil {
 		return "", nil, util.NewInternalServerError(err, "Failed to list jobs: %v", err)
@@ -217,12 +239,21 @@ func (s *JobStore) GetJob(id string) (*model.Job, error) {
 
 func (s *JobStore) addResourceReferences(filteredSelectBuilder sq.SelectBuilder) sq.SelectBuilder {
 	resourceRefConcatQuery := s.db.Concat([]string{`"["`, s.db.GroupConcat("r.Payload", ","), `"]"`}, "")
+	// Quote identifiers for table and columns
+	rrTable := QuoteIdentifier(s.db.SQLDialect, "resource_references")
+	jobsTable := QuoteIdentifier(s.db.SQLDialect, "jobs")
+	uuidCol := QuoteIdentifier(s.db.SQLDialect, "UUID")
+	resUUIDCol := QuoteIdentifier(s.db.SQLDialect, "ResourceUUID")
+	joinStmt := fmt.Sprintf("(SELECT * FROM %s WHERE ResourceType='Job') AS r ON %s.%s = r.%s",
+		rrTable, jobsTable, uuidCol, resUUIDCol)
+	// Quote the GROUP BY column as well
+	groupByStmt := fmt.Sprintf("%s.%s", jobsTable, uuidCol)
 	return sq.
 		Select("jobs.*", resourceRefConcatQuery+" AS refs").
 		FromSelect(filteredSelectBuilder, "jobs").
 		// Append all the resource references for the run as a json column
-		LeftJoin("(select * from resource_references where ResourceType='Job') AS r ON jobs.UUID=r.ResourceUUID").
-		GroupBy("jobs.UUID")
+		LeftJoin(joinStmt).
+		GroupBy(groupByStmt)
 }
 
 func (s *JobStore) scanRows(r *sql.Rows) ([]*model.Job, error) {

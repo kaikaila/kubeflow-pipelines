@@ -3,8 +3,6 @@
 package storage
 
 import (
-	"strconv"
-
 	sq "github.com/Masterminds/squirrel"
 )
 
@@ -23,25 +21,6 @@ func Builder(dialect SQLDialect) sq.StatementBuilderType {
 	default: // MySQLDialect, SQLiteDialect
 		return sqBuilderDefault
 	}
-}
-
-// Paginate applies limit and offset for pagination in a dialect-agnostic way.
-// pageSize is the maximum number of rows to return.
-// pageToken is a string representing the number of rows to skip (offset).
-func Paginate(
-	sb sq.SelectBuilder,
-	pageSize int,
-	pageToken string,
-) sq.SelectBuilder {
-	// Parse offset from pageToken; default to 0 on error or empty.
-	offset := 0
-	if pageToken != "" {
-		if i, err := strconv.Atoi(pageToken); err == nil {
-			offset = i
-		}
-	}
-	// Apply standard LIMIT/OFFSET, which works for MySQL, Postgres, and SQLite.
-	return sb.Limit(uint64(pageSize)).Offset(uint64(offset))
 }
 
 // QuoteIdentifier returns a quoted identifier for each dialect.
