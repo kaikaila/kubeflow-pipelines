@@ -55,8 +55,9 @@ func (s *DefaultExperimentStore) initializeDefaultExperimentTable() error {
 
 	// If the table is not initialized, then set the default value.
 	if !next {
-		sql, args, queryErr := sq.
-			Insert("default_experiments").
+		builder := Builder(s.db.SQLDialect)
+		sql, args, queryErr := builder.
+			Insert(QuoteIdentifier(s.db.SQLDialect, "default_experiments")).
 			SetMap(defaultExperimentDBValue).
 			ToSql()
 
@@ -80,10 +81,15 @@ func (s *DefaultExperimentStore) initializeDefaultExperimentTable() error {
 }
 
 func (s *DefaultExperimentStore) SetDefaultExperimentId(id string) error {
-	sql, args, err := sq.
-		Update("default_experiments").
-		SetMap(sq.Eq{"DefaultExperimentId": id}).
-		Where(sq.Eq{"DefaultExperimentId": ""}).
+	builder := Builder(s.db.SQLDialect)
+	sql, args, err := builder.
+		Update(QuoteIdentifier(s.db.SQLDialect, "default_experiments")).
+		Set(
+			QuoteIdentifier(s.db.SQLDialect, "DefaultExperimentId"), id,
+		).
+		Where(
+			sq.Eq{QuoteIdentifier(s.db.SQLDialect, "DefaultExperimentId"): ""},
+		).
 		ToSql()
 	if err != nil {
 		return util.NewInternalServerError(err, "Error creating query to set default experiment ID")
@@ -98,7 +104,11 @@ func (s *DefaultExperimentStore) SetDefaultExperimentId(id string) error {
 
 func (s *DefaultExperimentStore) GetDefaultExperimentId() (string, error) {
 	var defaultExperimentId string
-	sql, args, err := sq.Select(`"DefaultExperimentId"`).From("default_experiments").ToSql()
+	builder := Builder(s.db.SQLDialect)
+	sql, args, err := builder.
+		Select(QuoteIdentifier(s.db.SQLDialect, "DefaultExperimentId")).
+		From(QuoteIdentifier(s.db.SQLDialect, "default_experiments")).
+		ToSql()
 	if err != nil {
 		return "", util.NewInternalServerError(err, "Error creating query to get default experiment ID")
 	}
@@ -130,10 +140,15 @@ func (s *DefaultExperimentStore) GetDefaultExperimentId() (string, error) {
 // Update is used instead of delete so that we don't need to first check that the experiment ID is
 // there.
 func (s *DefaultExperimentStore) UnsetDefaultExperimentIdIfIdMatches(tx *sql.Tx, id string) error {
-	sql, args, err := sq.
-		Update("default_experiments").
-		SetMap(sq.Eq{"DefaultExperimentId": ""}).
-		Where(sq.Eq{"DefaultExperimentId": id}).
+	builder := Builder(s.db.SQLDialect)
+	sql, args, err := builder.
+		Update(QuoteIdentifier(s.db.SQLDialect, "default_experiments")).
+		Set(
+			QuoteIdentifier(s.db.SQLDialect, "DefaultExperimentId"), "",
+		).
+		Where(
+			sq.Eq{QuoteIdentifier(s.db.SQLDialect, "DefaultExperimentId"): id},
+		).
 		ToSql()
 	if err != nil {
 		return util.NewInternalServerError(err, "Failed to create command to clear default experiment with ID: %s", id)

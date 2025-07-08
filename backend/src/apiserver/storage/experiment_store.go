@@ -25,9 +25,6 @@ import (
 	"github.com/kubeflow/pipelines/backend/src/common/util"
 )
 
-// sqBuilder is a Squirrel StatementBuilder configured for PostgreSQL placeholders.
-var sqBuilder = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-
 type ExperimentStoreInterface interface {
 	CreateExperiment(*model.Experiment) (*model.Experiment, error)
 	GetExperiment(uuid string) (*model.Experiment, error)
@@ -64,8 +61,13 @@ func (s *ExperimentStore) ListExperiments(filterContext *model.FilterContext, op
 		return nil, 0, "", util.NewInternalServerError(err, "Failed to list experiments: %v", err)
 	}
 
+	// Quote table name and columns for current dialect
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	quotedCols := QuoteColumns(s.db.SQLDialect, experimentColumns)
+
 	// SQL for getting the filtered and paginated rows
-	sqlBuilder := sqBuilder.Select(experimentColumns...).From("experiments")
+	builder := Builder(s.db.SQLDialect)
+	sqlBuilder := builder.Select(quotedCols...).From(tableName)
 	if filterContext.ReferenceKey != nil && filterContext.ReferenceKey.Type == model.NamespaceResourceType {
 		sqlBuilder = sqlBuilder.Where(sq.Eq{"Namespace": filterContext.ReferenceKey.ID})
 	}
@@ -78,7 +80,8 @@ func (s *ExperimentStore) ListExperiments(filterContext *model.FilterContext, op
 
 	// SQL for getting total size. This matches the query to get all the rows above, in order
 	// to do the same filter, but counts instead of scanning the rows.
-	sqlBuilder = sqBuilder.Select("count(*)").From("experiments")
+	builder = Builder(s.db.SQLDialect)
+	sqlBuilder = builder.Select("count(*)").From(tableName)
 	if filterContext.ReferenceKey != nil && filterContext.ReferenceKey.Type == model.NamespaceResourceType {
 		sqlBuilder = sqlBuilder.Where(sq.Eq{"Namespace": filterContext.ReferenceKey.ID})
 	}
@@ -141,10 +144,12 @@ func (s *ExperimentStore) ListExperiments(filterContext *model.FilterContext, op
 }
 
 func (s *ExperimentStore) GetExperiment(uuid string) (*model.Experiment, error) {
-	sql, args, err := sqBuilder.
-		Select(experimentColumns...).
-		From("experiments").
-		Where(sq.Eq{"uuid": uuid}).
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	quotedCols := QuoteColumns(s.db.SQLDialect, experimentColumns)
+	sql, args, err := Builder(s.db.SQLDialect).
+		Select(quotedCols...).
+		From(tableName).
+		Where(sq.Eq{"UUID": uuid}).
 		Limit(1).
 		ToSql()
 	if err != nil {
@@ -167,9 +172,11 @@ func (s *ExperimentStore) GetExperiment(uuid string) (*model.Experiment, error) 
 }
 
 func (s *ExperimentStore) GetExperimentByNameNamespace(name string, namespace string) (*model.Experiment, error) {
-	sql, args, err := sqBuilder.
-		Select(experimentColumns...).
-		From("experiments").
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	quotedCols := QuoteColumns(s.db.SQLDialect, experimentColumns)
+	sql, args, err := Builder(s.db.SQLDialect).
+		Select(quotedCols...).
+		From(tableName).
 		Where(sq.Eq{
 			"Name":      name,
 			"Namespace": namespace,
@@ -241,10 +248,14 @@ func (s *ExperimentStore) CreateExperiment(experiment *model.Experiment) (*model
 		return nil, util.NewInvalidInputError("Invalid value for StorageState field: %q", newExperiment.StorageState)
 	}
 
+	// Quote table name and columns for current dialect
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	quotedCols := QuoteColumns(s.db.SQLDialect, experimentColumns)
+
 	// Build INSERT SQL with PostgreSQL-compatible placeholders
-	sqlStr, args, err := sqBuilder.
-		Insert("experiments").
-		Columns("UUID", "Name", "Description", "CreatedAtInSec", "LastRunCreatedAtInSec", "Namespace", "StorageState").
+	sqlStr, args, err := Builder(s.db.SQLDialect).
+		Insert(tableName).
+		Columns(quotedCols...).
 		Values(
 			newExperiment.UUID,
 			newExperiment.Name,
@@ -271,7 +282,8 @@ func (s *ExperimentStore) CreateExperiment(experiment *model.Experiment) (*model
 }
 
 func (s *ExperimentStore) DeleteExperiment(id string) error {
-	experimentSQL, experimentArgs, err := sqBuilder.Delete("experiments").Where(sq.Eq{"UUID": id}).ToSql()
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	experimentSQL, experimentArgs, err := Builder(s.db.SQLDialect).Delete(tableName).Where(sq.Eq{"UUID": id}).ToSql()
 	if err != nil {
 		return util.NewInternalServerError(err,
 			"Failed to create query to delete experiment: %s", id)
@@ -307,8 +319,9 @@ func (s *ExperimentStore) ArchiveExperiment(expId string) error {
 	// ArchiveExperiment results in
 	// 1. The experiment getting archived
 	// 2. All the runs in the experiment getting archived no matter what previous storage state they are in
-	sql, args, err := sqBuilder.
-		Update("experiments").
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	sql, args, err := Builder(s.db.SQLDialect).
+		Update(tableName).
 		SetMap(sq.Eq{
 			"StorageState": model.StorageStateArchived.ToString(),
 		}).
@@ -329,7 +342,7 @@ func (s *ExperimentStore) ArchiveExperiment(expId string) error {
 		"run_details.UUID = resource_references.ResourceUUID",
 		"resource_references.ResourceType = ? AND resource_references.ReferenceUUID = ? AND resource_references.ReferenceType = ?")
 
-	updateRunsWithExperimentUUIDSql, updateRunsWithExperimentUUIDArgs, err := sqBuilder.
+	updateRunsWithExperimentUUIDSql, updateRunsWithExperimentUUIDArgs, err := Builder(s.db.SQLDialect).
 		Update("run_details").
 		SetMap(sq.Eq{
 			"StorageState": model.StorageStateArchived.ToString(),
@@ -400,8 +413,9 @@ func (s *ExperimentStore) UnarchiveExperiment(expId string) error {
 	// UnarchiveExperiment results in
 	// 1. The experiment getting unarchived
 	// 2. All the archived runs and disabled jobs will stay archived
-	sql, args, err := sqBuilder.
-		Update("experiments").
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	sql, args, err := Builder(s.db.SQLDialect).
+		Update(tableName).
 		SetMap(sq.Eq{
 			"StorageState": model.StorageStateAvailable.ToString(),
 		}).
@@ -424,8 +438,9 @@ func (s *ExperimentStore) UnarchiveExperiment(expId string) error {
 func (s *ExperimentStore) SetLastRunTimestamp(run *model.Run) error {
 	expId := run.ExperimentId
 	// SetLastRunTimestamp results in the experiment getting last_run_created_at updated
-	query, args, err := sqBuilder.
-		Update("experiments").
+	tableName := QuoteIdentifier(s.db.SQLDialect, "experiments")
+	query, args, err := Builder(s.db.SQLDialect).
+		Update(tableName).
 		SetMap(sq.Eq{
 			"LastRunCreatedAtInSec": run.CreatedAtInSec,
 		}).

@@ -552,7 +552,7 @@ func InitDBClient(initConnectionTimeout time.Duration) *storage.DB {
 		glog.Fatalf("Failed to update pipeline description type. Error: %s", err)
 	}
 
-	// Because PostgreSQL was supported later, there's no need to delete the relic index
+	// Because PostgreSQL was supported later, there's no need to delete the relic index for Postgres
 	if driverName == "mysql" {
 		// If the old unique index idx_pipeline_version_uuid_name on pipeline_versions exists, remove it.
 		rows, err := db.Raw(`show index from pipeline_versions where Key_name='idx_pipeline_version_uuid_name'`).Rows()
