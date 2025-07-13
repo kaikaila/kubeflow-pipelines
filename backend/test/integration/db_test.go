@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
+	sq "github.com/Masterminds/squirrel"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	cm "github.com/kubeflow/pipelines/backend/src/apiserver/client_manager"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/model"
@@ -59,8 +60,12 @@ func (s *DBTestSuite) TestInitDBClient_MySQL() {
 	viper.Set("DBConfig.MySQLConfig.DBName", "mlpipeline")
 	// The default port-forwarding IP address that test uses is different compared to production
 	viper.Set("DBConfig.MySQLConfig.Host", "localhost")
+	viper.Set("DBConfig.MySQLConfig.Password", "pass") // lyk add this for debug
 	duration, _ := time.ParseDuration("1m")
-	db := cm.InitDBClient(duration)
+	db, sqBuilder := cm.InitDBClient(duration)
+	// Expect builder with '?' placeholder format for MySQL
+	expectedBuilder := sq.StatementBuilder.PlaceholderFormat(sq.Question)
+	assert.Equal(t, expectedBuilder, sqBuilder, "InitDBClient(mysql) should return builder with '?' placeholder")
 	assert.NotNil(t, db)
 
 	// Extract underlying *sql.DB and wrap in gorm.DB
@@ -84,11 +89,14 @@ func (s *DBTestSuite) TestInitDBClient_PostgreSQL() {
 	viper.Set("DBDriverName", "pgx")
 	viper.Set("DBConfig.PostgreSQLConfig.DBName", "mlpipeline")
 	// The default port-forwarding IP address that test uses is different compared to production
-	viper.Set("DBConfig.PostgreSQLConfig.Host", "127.0.0.3")
+	viper.Set("DBConfig.PostgreSQLConfig.Host", "127.0.0.1")
 	viper.Set("DBConfig.PostgreSQLConfig.User", "user")
 	viper.Set("DBConfig.PostgreSQLConfig.Password", "password")
 	duration, _ := time.ParseDuration("1m")
-	db := cm.InitDBClient(duration)
+	db, sqBuilder := cm.InitDBClient(duration)
+	// Expect builder with '$' placeholder format for PostgreSQL
+	expectedBuilder := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	assert.Equal(t, expectedBuilder, sqBuilder, "InitDBClient(pgx) should return builder with '$' placeholder")
 	assert.NotNil(t, db)
 
 	// Extract underlying *sql.DB and wrap in gorm.DB

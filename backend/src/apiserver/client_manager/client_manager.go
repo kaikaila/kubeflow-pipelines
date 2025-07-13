@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	sq "github.com/Masterminds/squirrel"
 	"github.com/cenkalti/backoff"
 	mysqlStd "github.com/go-sql-driver/mysql"
 	"github.com/golang/glog"
@@ -95,6 +96,7 @@ func init() {
 // Container for all service clients.
 type ClientManager struct {
 	db                        *storage.DB
+	sqBuilder                 sq.StatementBuilderType
 	experimentStore           storage.ExperimentStoreInterface
 	pipelineStore             storage.PipelineStoreInterface
 	jobStore                  storage.JobStoreInterface
@@ -273,7 +275,8 @@ func (c *ClientManager) init(options *Options) error {
 
 	glog.Info("Initializing client manager")
 	glog.Info("Initializing DB client...")
-	db := InitDBClient(common.GetDurationConfig(initConnectionTimeout))
+	db, sqBuilder := InitDBClient(common.GetDurationConfig(initConnectionTimeout))
+	c.sqBuilder = sqBuilder
 	db.SetConnMaxLifetime(common.GetDurationConfig(dbConMaxLifeTime))
 	glog.Info("DB client initialized successfully")
 
@@ -399,7 +402,7 @@ func EnsureUniqueCompositeIndex(db *gorm.DB, model interface{}, indexName string
 	}
 }
 
-func InitDBClient(initConnectionTimeout time.Duration) *storage.DB {
+func InitDBClient(initConnectionTimeout time.Duration) (*storage.DB, sq.StatementBuilderType) {
 	// Allowed driverName values:
 	// 1) To use MySQL, use `mysql`
 	// 2) To use PostgreSQL, use `pgx`
@@ -581,7 +584,19 @@ func InitDBClient(initConnectionTimeout time.Duration) *storage.DB {
 	default:
 		dialect = storage.NewMySQLDialect()
 	}
-	return storage.NewDB(newdb, dialect)
+
+	var sqBuilder sq.StatementBuilderType
+	switch driverName {
+	case "mysql":
+		sqBuilder = sq.StatementBuilder.PlaceholderFormat(sq.Question)
+	case "pgx":
+
+		sqBuilder = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	default:
+		glog.Fatalf("Unsupported database driver %s, please use `mysql` for MySQL, or `pgx` for PostgreSQL.", driverName)
+	}
+
+	return storage.NewDB(newdb, dialect), sqBuilder
 }
 
 // Initializes Database driver. Use `driverName` to indicate which type of DB to use:
@@ -620,9 +635,9 @@ func initDBDriver(driverName string, initConnectionTimeout time.Duration) string
 	var err error
 
 	// lyk add this for debugging
-	glog.Infof("Attempting to connect to Postgres at %s, dsn: %s",
-		common.GetStringConfig(postgresHost),
-		sqlConfig)
+	// glog.Infof("Attempting to connect to Postgres at %s, dsn: %s",
+	// 	common.GetStringConfig(postgresHost),
+	// 	sqlConfig)
 
 	operation := func() error {
 		db, err = sql.Open(driverName, sqlConfig)
