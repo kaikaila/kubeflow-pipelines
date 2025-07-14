@@ -32,7 +32,7 @@ import (
 )
 
 // verifyCompositeIndex asserts that the given gorm.DB has created both the unique constraint and index named idx on model mdl.
-func verifyCompositeIndex(t *testing.T, gdb *gorm.DB, mdl interface{}, idx string) {
+func verifyCompositeIndexandConstraint(t *testing.T, gdb *gorm.DB, mdl interface{}, idx string) {
 	assert.True(t, gdb.Migrator().HasConstraint(mdl, idx), "constraint %s should exist", idx)
 	assert.True(t, gdb.Migrator().HasIndex(mdl, idx), "index %s should exist", idx)
 }
@@ -76,7 +76,9 @@ func (s *DBTestSuite) TestInitDBClient_MySQL() {
 		t.Fatalf("failed to open gorm.DB for MySQL: %v", err)
 	}
 	// Verify composite unique constraint and index on the Pipeline model
-	verifyCompositeIndex(t, gdb, &model.Pipeline{}, "namespace_name")
+	verifyCompositeIndexandConstraint(t, gdb, &model.Pipeline{}, "namespace_name")
+	verifyCompositeIndexandConstraint(t, gdb, &model.PipelineVersion{}, "idx_pipelineid_name")
+	verifyCompositeIndexandConstraint(t, gdb, &model.Experiment{}, "namespace_name")
 }
 
 // Test PostgreSQL initializes correctly
@@ -107,7 +109,9 @@ func (s *DBTestSuite) TestInitDBClient_PostgreSQL() {
 		t.Fatalf("failed to open gorm.DB for PostgreSQL: %v", err)
 	}
 	// Verify composite unique constraint and index on the Pipeline model
-	verifyCompositeIndex(s.T(), gdb, &model.Pipeline{}, "namespace_name")
+	verifyCompositeIndexandConstraint(s.T(), gdb, &model.Pipeline{}, "namespace_name")
+	verifyCompositeIndexandConstraint(t, gdb, &model.PipelineVersion{}, "idx_pipelineid_name")
+	verifyCompositeIndexandConstraint(t, gdb, &model.Experiment{}, "namespace_name")
 }
 
 func TestDB(t *testing.T) {

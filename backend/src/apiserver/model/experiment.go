@@ -28,6 +28,11 @@ type Experiment struct {
 
 // Note: Experiment.StorageState can have values: "STORAGE_STATE_UNSPECIFIED", "AVAILABLE" or "ARCHIVED"
 
+// TableName overrides GORM's table name inference.
+func (Experiment) TableName() string {
+	return "experiments"
+}
+
 func (e Experiment) GetValueOfPrimaryKey() string {
 	return e.UUID
 }

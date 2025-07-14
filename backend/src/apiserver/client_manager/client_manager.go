@@ -541,6 +541,32 @@ func InitDBClient(initConnectionTimeout time.Duration) (*storage.DB, sq.Statemen
 	EnsureUniqueCompositeIndex(db, &model.Experiment{}, "idx_name_namespace")
 	EnsureUniqueCompositeIndex(db, &model.PipelineVersion{}, "idx_pipelineid_name")
 
+	// // MySQL automatically creates a UNIQUE constraint when a UNIQUE index is defined,
+	// so EnsureUniqueCompositeIndex alone is sufficient for MySQL. However, PostgreSQL
+	// only creates a UNIQUE index and does not register a UNIQUE constraint. Since GORM
+	// does not yet support composite UNIQUE constraints natively, we must add them
+	// manually via raw SQL as a workaround.
+	if driverName == "pgx" {
+		// namespace_name on pipelines(Namespace,Name)
+		db.Exec(`
+			ALTER TABLE pipelines
+			ADD CONSTRAINT namespace_name
+			UNIQUE USING INDEX namespace_name;
+		`)
+		// idx_name_namespace on experiments(Name,Namespace)
+		db.Exec(`
+			ALTER TABLE experiments
+			ADD CONSTRAINT idx_name_namespace
+			UNIQUE USING INDEX idx_name_namespace;
+		`)
+		// idx_pipelineid_name on pipeline_versions(PipelineId,Name)
+		db.Exec(`
+			ALTER TABLE pipeline_versions
+			ADD CONSTRAINT idx_pipelineid_name
+			UNIQUE USING INDEX idx_pipelineid_name;
+		`)
+	}
+
 	// Data backfill for pipeline_versions if this is the first time for
 	// pipeline_versions to enter mlpipeline DB.
 	if initializePipelineVersions {
@@ -574,24 +600,17 @@ func InitDBClient(initConnectionTimeout time.Duration) (*storage.DB, sq.Statemen
 	if err != nil {
 		glog.Fatalf("Failed to retrieve *sql.DB from gorm.DB. Error: %v", err)
 	}
-	// Select SQLDialect based on driverName
-	var dialect storage.SQLDialect
-	switch driverName {
-	case "pgx", "postgres":
-		dialect = storage.NewPostgreDialect()
-	case "sqlite", "sqlite3":
-		dialect = storage.NewSQLiteDialect()
-	default:
-		dialect = storage.NewMySQLDialect()
-	}
 
+	// Select SQLDialect and Squirrel Statement Builder based on driverName
+	var dialect storage.SQLDialect
 	var sqBuilder sq.StatementBuilderType
 	switch driverName {
-	case "mysql":
-		sqBuilder = sq.StatementBuilder.PlaceholderFormat(sq.Question)
 	case "pgx":
-
+		dialect = storage.NewPostgreDialect()
 		sqBuilder = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	case "sqlite", "sqlite3":
+		dialect = storage.NewSQLiteDialect()
+		sqBuilder = sq.StatementBuilder.PlaceholderFormat(sq.Question)
 	default:
 		glog.Fatalf("Unsupported database driver %s, please use `mysql` for MySQL, or `pgx` for PostgreSQL.", driverName)
 	}
@@ -780,12 +799,41 @@ func initPipelineVersionsFromPipelines(db *gorm.DB) {
 	// On the other hand, pipeline and its pipeline versions created after
 	// pipeline version API is introduced will have different Ids; and the minio
 	// file will be put directly into the directories for pipeline versions.
-	tx.Exec(`INSERT INTO
-	pipeline_versions (UUID, Name, CreatedAtInSec, Parameters, Status, PipelineId)
-	SELECT UUID, Name, CreatedAtInSec, Parameters, Status, UUID FROM pipelines;`)
+	// Backfill pipeline_versions from pipelines, then set default version on pipelines.
+	stmt := &gorm.Statement{DB: db}
 
-	// Step 2: modifiy pipelines table after pipeline_versions are populated.
-	tx.Exec("update pipelines set DefaultVersionId=UUID;")
+	// --- Step 1: insert legacy pipelines into pipeline_versions ---
+	if err := stmt.Parse(&model.PipelineVersion{}); err != nil {
+		glog.Fatalf("Failed to parse PipelineVersion model for quoting: %v", err)
+	}
+	pvTable := stmt.Quote(stmt.Table) // quoted "pipeline_versions" or `pipeline_versions`
+	fields := []string{"UUID", "Name", "CreatedAtInSec", "Parameters", "Status", "PipelineId"}
+	quoted := make([]string, len(fields))
+	for i, f := range fields {
+		quoted[i] = stmt.Quote(f)
+	}
+	selectTable := stmt.Quote("pipelines") // pipelines table is always lower-case in struct naming
+	insertSQL := fmt.Sprintf(
+		"INSERT INTO %s (%s) SELECT %s FROM %s;",
+		pvTable,
+		strings.Join(quoted, ", "),
+		strings.Join(quoted, ", "),
+		selectTable,
+	)
+	tx.Exec(insertSQL)
+
+	// --- Step 2: update pipelines to point DefaultVersionId to UUID ---
+	if err := stmt.Parse(&model.Pipeline{}); err != nil {
+		glog.Fatalf("Failed to parse Pipeline model for quoting: %v", err)
+	}
+	pipelinesTable := stmt.Quote(stmt.Table) // quoted "pipelines" or `pipelines`
+	colDefault := stmt.Quote("DefaultVersionId")
+	colID := stmt.Quote("UUID")
+	updateSQL := fmt.Sprintf(
+		"UPDATE %s SET %s = %s;",
+		pipelinesTable, colDefault, colID,
+	)
+	tx.Exec(updateSQL)
 
 	tx.Commit()
 }
