@@ -376,7 +376,7 @@ func addDisplayNameColumn(db *gorm.DB, quotedTableName string, driverName string
 	return nil
 }
 
-// EnsureUniqueCompositeIndex enforces a composite unique index on a given model.
+// EnsureUniqueCompositeIndexAndConstraint enforces a composite unique index on a given model.
 // It checks both the existence of a database-level constraint and the corresponding index.
 // This function serves as a safety fallback in case AutoMigrate fails to create the index
 // due to GORM's conservative merge strategy or legacy residual indexes from earlier versions.
@@ -389,7 +389,7 @@ func addDisplayNameColumn(db *gorm.DB, quotedTableName string, driverName string
 // - db: the active GORM database connection
 // - model: the target model (passed by reference)
 // - indexName: the logical name of the composite unique index as defined in the model's GORM tag
-func EnsureUniqueCompositeIndex(db *gorm.DB, model interface{}, indexName string) {
+func EnsureUniqueCompositeIndexAndConstraint(db *gorm.DB, model interface{}, indexName string) {
 	if !db.Migrator().HasConstraint(model, indexName) {
 		if err := db.Migrator().CreateConstraint(model, indexName); err != nil {
 			glog.Fatalf("Failed to create constraint %s. Error: %v", indexName, err)
@@ -537,11 +537,11 @@ func InitDBClient(initConnectionTimeout time.Duration) (*storage.DB, sq.Statemen
 	// integrity issues.
 	//
 	// See: https://gorm.io/docs/migration.html#Auto-Migration
-	EnsureUniqueCompositeIndex(db, &model.Pipeline{}, "namespace_name")
-	EnsureUniqueCompositeIndex(db, &model.Experiment{}, "idx_name_namespace")
-	EnsureUniqueCompositeIndex(db, &model.PipelineVersion{}, "idx_pipelineid_name")
+	EnsureUniqueCompositeIndexAndConstraint(db, &model.Pipeline{}, "namespace_name")
+	EnsureUniqueCompositeIndexAndConstraint(db, &model.Experiment{}, "idx_name_namespace")
+	EnsureUniqueCompositeIndexAndConstraint(db, &model.PipelineVersion{}, "idx_pipelineid_name")
 
-	// // MySQL automatically creates a UNIQUE constraint when a UNIQUE index is defined,
+	// MySQL automatically creates a UNIQUE constraint when a UNIQUE index is defined,
 	// so EnsureUniqueCompositeIndex alone is sufficient for MySQL. However, PostgreSQL
 	// only creates a UNIQUE index and does not register a UNIQUE constraint. Since GORM
 	// does not yet support composite UNIQUE constraints natively, we must add them
