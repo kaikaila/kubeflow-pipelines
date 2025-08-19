@@ -2,8 +2,9 @@ name: backend-postgres-integration-kustomize
 
 on:
   push:
-    branches: [ci/pgx-kustomize]
-  # Manual trigger only (no automatic triggers on PR or push)
+    branches:
+      - ci/pgx-kustomize
+      - feature/replace-str-with-largetext-WIP
   workflow_dispatch: {}
 
 jobs:
@@ -25,7 +26,7 @@ jobs:
         uses: helm/kind-action@v1
         with:
           cluster_name: kfp-ci
-          wait: true
+          wait: 300s
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
