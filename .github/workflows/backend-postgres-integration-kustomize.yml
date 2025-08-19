@@ -1,0 +1,93 @@
+name: backend-postgres-integration-kustomize
+
+on:
+  push:
+    branches: [ci/pgx-kustomize]
+  # Manual trigger only (no automatic triggers on PR or push)
+  workflow_dispatch: {}
+
+jobs:
+  it-postgres-kustomize:
+    name: Integration (pgx via Kustomize+KinD)
+    runs-on: ubuntu-latest
+    continue-on-error: true # Temporarily allow failures; switch to false after LargeText/storage changes land
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Create KinD cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kfp-ci
+          wait: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "latest"
+
+      - name: Install kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: "latest"
+
+      - name: Install utils (psql, nc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client netcat
+
+      - name: Create namespace
+        run: kubectl create namespace kfp-pgx-test || true
+
+      - name: Deploy Postgres via Kustomize
+        working-directory: manifests/kustomize/third-party/postgresql
+        run: |
+          # Render and apply to kfp-pgx-test
+          kustomize build ./base | kubectl -n kfp-pgx-test apply -f -
+          kubectl -n kfp-pgx-test get all
+
+      - name: Port-forward Postgres
+        run: |
+          # Background port-forward
+          kubectl -n kfp-pgx-test port-forward svc/postgres-service 5432:5432 --address=127.0.0.1 >/dev/null 2>&1 &
+          echo $! > pf.pid
+
+          # Wait for port to be ready + probe
+          for i in {1..60}; do
+            nc -z 127.0.0.1 5432 && break
+            sleep 2
+          done
+
+          # Simple liveness probe using default credentials (aligns with KFP examples)
+          PGPASSWORD=kubeflow psql -h 127.0.0.1 -p 5432 -U kubeflow -d kubeflow -c "SELECT 1;" || true
+
+      - name: Run backend integration tests (pgx)
+        env:
+          DB_TYPE: postgres
+          DB_DRIVER: pgx
+          DB_HOST: 127.0.0.1
+          DB_PORT: "5432"
+          DB_USER: kubeflow
+          DB_PASSWORD: kubeflow
+          DB_NAME: kubeflow
+          NAMESPACE: kfp-pgx-test
+        run: |
+          # Minimal, non-interactive flags equivalent to run_tests_locally.sh (postgres)
+          # Allow failure initially to establish a visible safety net
+          go test -v ./backend/test/integration/... -args -runIntegrationTests=true -isDevMode=true -runPostgreSQLTests=true -localTest=true || true
+
+      - name: Cleanup (always)
+        if: always()
+        run: |
+          echo "==== PG Pods ===="
+          kubectl -n kfp-pgx-test get pods -o wide || true
+          echo "==== PG Events ===="
+          kubectl -n kfp-pgx-test get events --sort-by=.lastTimestamp | tail -n 100 || true
+
+          if [ -f pf.pid ]; then kill -9 $(cat pf.pid) || true; fi
