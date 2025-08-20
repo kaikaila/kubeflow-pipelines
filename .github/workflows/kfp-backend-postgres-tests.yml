@@ -1,4 +1,4 @@
-name: backend-postgres-integration-kustomize
+name: KFP Backend Postgres Tests
 
 on:
   push:
@@ -8,8 +8,8 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  it-postgres-kustomize:
-    name: Integration (pgx via Kustomize+KinD)
+  postgres-pgx:
+    name: Backend Postgres (pgx via Kustomize+KinD)
     runs-on: ubuntu-latest
     continue-on-error: true # Temporarily allow failures; switch to false after LargeText/storage changes land
 
