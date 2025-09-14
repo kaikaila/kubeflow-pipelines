@@ -374,8 +374,10 @@ func (s *TaskStore) patchWithExistingTasks(tasks []*model.Task) error {
 // Creates new entries or updates existing ones.
 func (s *TaskStore) CreateOrUpdateTasks(tasks []*model.Task) ([]*model.Task, error) {
 	buildQuery := func(ts []*model.Task) (string, []interface{}, error) {
+		q := s.dialect.QuoteIdentifier
+		quotedCols := quoteAll(q, taskColumnsWithPayload)
 		sqlInsert := insertUpsert(s.dialect, table_name, []string{"UUID"}, true, taskColumnsWithPayload)
-		sqlInsert = sqlInsert.Columns(taskColumnsWithPayload...)
+		sqlInsert = sqlInsert.Columns(quotedCols...)
 		for _, t := range ts {
 			childrenPodsString := ""
 			if len(t.ChildrenPods) > 0 {
