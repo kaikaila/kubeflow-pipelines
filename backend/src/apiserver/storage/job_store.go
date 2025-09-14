@@ -103,6 +103,8 @@ func (s *JobStore) ListJobs(
 	if err != nil {
 		return errorF(err)
 	}
+	glog.Infof("ListJobs rowsSql: %s, args: %v", rowsSql, rowsArgs) // lyk
+	glog.Infof("ListJobs sizeSql: %s, args: %v", sizeSql, sizeArgs) // lyk
 	// Use a transaction to make sure we're returning the total_size of the same rows queried
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -179,15 +181,15 @@ func (s *JobStore) buildSelectJobsQuery(selectCount bool, opts *list.Options,
 	// If we're not just counting, then also add select columns and perform a left join
 	// to get resource reference information. Also add pagination.
 	if !selectCount {
-		sqlBuilder = opts.AddPaginationToSelect(sqlBuilder)
 		sqlBuilder = s.addResourceReferences(sqlBuilder)
+		sqlBuilder = opts.AddPaginationToSelect(sqlBuilder)
 		sqlBuilder = opts.AddSortingToSelect(sqlBuilder)
 	}
 	sql, args, err := sqlBuilder.ToSql()
 	if err != nil {
 		return "", nil, util.NewInternalServerError(err, "Failed to list jobs: %v", err)
 	}
-
+	glog.Infof("buildSelectJobsQuery (selectCount=%v) sql: %s, args: %v", selectCount, sql, args) // lyk
 	return sql, args, err
 }
 
