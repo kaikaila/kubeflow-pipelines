@@ -347,32 +347,30 @@ func (s *ExperimentStore) ArchiveExperiment(expId string) error {
 	}
 
 	// Build a subquery to select ResourceUUIDs of runs that belong to the experiment via resource_references.
-	// This works across dialects (Postgres/MySQL/SQLite) and removes the need for the legacy UpdateWithJointOrFrom().
-	subSel, subArgs, err := qb.
-		Select(q("ResourceUUID")).
-		From(q("resource_references")).
-		Where(sq.Eq{
-			q("ResourceType"):  model.RunResourceType,
-			q("ReferenceUUID"): expId,
-			q("ReferenceType"): model.ExperimentResourceType,
-		}).
-		ToSql()
-	if err != nil {
-		return util.NewInternalServerError(err,
-			"Failed to create subquery to archive runs with experiment reference being %s. error: '%v'", expId, err.Error())
-	}
+	// Instead of using squirrel's ToSql (which can cause placeholder conflicts), use a raw SQL string with ? placeholders.
+	subSel := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s = ? AND %s = ? AND %s = ?",
+		q("ResourceUUID"), q("resource_references"),
+		q("ReferenceType"), q("ReferenceUUID"), q("ResourceType"),
+	)
 
 	// UPDATE run_details SET StorageState = 'ARCHIVED' WHERE UUID IN (subSel)
 	b := qb.
 		Update(q("run_details")).
 		SetMap(sq.Eq{q("StorageState"): model.StorageStateArchived.ToString()}).
-		Where(sq.Expr(fmt.Sprintf("%s IN (%s)", q("UUID"), subSel), subArgs...))
+		Where(sq.Expr(fmt.Sprintf("%s IN (%s)", q("UUID"), subSel)))
 
 	updateRunsSQL, updateRunsArgs, err := b.ToSql()
 	if err != nil {
 		return util.NewInternalServerError(err,
 			"Failed to create query to archive runs with experiment reference being %s. error: '%v'", expId, err.Error())
 	}
+	// Manually append the subquery arguments in the correct order: outer args, then subquery args.
+	updateRunsArgs = append(updateRunsArgs,
+		model.ExperimentResourceType,
+		expId,
+		model.RunResourceType,
+	)
 
 	updateRunsWithExperimentUUIDSql, updateRunsWithExperimentUUIDArgs, err := qb.
 		Update(q("run_details")).
@@ -387,39 +385,31 @@ func (s *ExperimentStore) ArchiveExperiment(expId string) error {
 			"Failed to create query to archive the runs in an experiment %s. error: '%v'", expId, err.Error())
 	}
 
-	var updateJobsArgs []interface{}
 	now := s.time.Now().Unix()
-	updateJobsArgs = append(updateJobsArgs, false, now, model.JobResourceType, expId, model.ExperimentResourceType)
 	// TODO(gkcalat): deprecate resource_references table once we migrate to v2beta1 and switch to filtering on Job's `experiment_id' instead.
-	// Build a subquery to select ResourceUUIDs of jobs that belong to the experiment via resource_references.
-	subSelJob, subArgsJob, err := qb.
-		Select(q("ResourceUUID")).
-		From(q("resource_references")).
-		Where(sq.Eq{
-			q("ResourceType"):  model.JobResourceType,
-			q("ReferenceUUID"): expId,
-			q("ReferenceType"): model.ExperimentResourceType,
-		}).
-		ToSql()
-	if err != nil {
-		return util.NewInternalServerError(err,
-			"Failed to create subquery to disable jobs with experiment reference being %s. error: '%v'", expId, err.Error())
-	}
+	// Build a subquery to select Job UUIDs via resource_references using raw placeholders to avoid $ index conflicts.
+	subSelJob := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s = ? AND %s = ? AND %s = ?",
+		q("ResourceUUID"), q("resource_references"),
+		q("ReferenceType"), q("ReferenceUUID"), q("ResourceType"),
+	)
 
-	// UPDATE jobs SET Enabled = false, UpdatedAtInSec = now WHERE UUID IN (subSelJob)
+	// UPDATE jobs SET Enabled=false, UpdatedAtInSec=now WHERE UUID IN (subSelJob)
 	bJobs := qb.
 		Update(q("jobs")).
 		SetMap(sq.Eq{
 			q("Enabled"):        false,
 			q("UpdatedAtInSec"): now,
 		}).
-		Where(sq.Expr(fmt.Sprintf("%s IN (%s)", q("UUID"), subSelJob), subArgsJob...))
+		Where(sq.Expr(fmt.Sprintf("%s IN (%s)", q("UUID"), subSelJob)))
 
 	updateJobsSQL, updateJobsArgs, err := bJobs.ToSql()
 	if err != nil {
 		return util.NewInternalServerError(err,
 			"Failed to create query to disable jobs in experiment %s. error: '%v'", expId, err.Error())
 	}
+	// Append subquery args in the correct order: ReferenceType, ReferenceUUID, ResourceType
+	updateJobsArgs = append(updateJobsArgs, model.ExperimentResourceType, expId, model.JobResourceType)
 
 	// In a single transaction, we update experiments, run_details and jobs tables.
 	tx, err := s.db.Begin()
