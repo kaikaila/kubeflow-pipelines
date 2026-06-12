@@ -126,9 +126,9 @@ fi
 # Deploy multi-user prerequisites if multi-user mode is enabled
 if [ "${MULTI_USER}" == "true" ]; then
   echo "Installing Istio..."
-  kubectl apply -k https://github.com/kubeflow/manifests/common/istio/istio-crds/base?ref=master
-  kubectl apply -k https://github.com/kubeflow/manifests/common/istio/istio-namespace/base?ref=master
-  kubectl apply -k https://github.com/kubeflow/manifests/common/istio/istio-install/base?ref=master
+  kubectl apply -k https://github.com/kubeflow/manifests/common/istio/istio-crds/base?ref=v1.10.0
+  kubectl apply -k https://github.com/kubeflow/manifests/common/istio/istio-namespace/base?ref=v1.10.0
+  kubectl apply -k https://github.com/kubeflow/manifests/common/istio/istio-install/base?ref=v1.10.0
   echo "Waiting for all Istio Pods to become ready..."
   kubectl wait --for=condition=Ready pods --all -n istio-system --timeout=300s
 
@@ -137,7 +137,7 @@ if [ "${MULTI_USER}" == "true" ]; then
   kubectl wait --for condition=established --timeout=30s crd/compositecontrollers.metacontroller.k8s.io
 
   echo "Installing Profile Controller Resources..."
-  kubectl apply -k https://github.com/kubeflow/manifests/applications/dashboard/upstream/profile-controller/overlays/kubeflow?ref=master
+  kubectl apply -k https://github.com/kubeflow/manifests/applications/dashboard/upstream/profile-controller/overlays/kubeflow?ref=v1.10.0
   kubectl -n kubeflow wait --for=condition=Ready pods -l app.kubernetes.io/name=profile-controller --timeout 180s
 fi
 
