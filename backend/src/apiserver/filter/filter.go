@@ -413,6 +413,13 @@ func (f *Filter) AddToSelect(sb squirrel.SelectBuilder, quote func(string) strin
 		for _, v := range vs {
 			switch ss := v.(type) {
 			case []string:
+				// An empty list must not produce "IN ()", which is invalid SQL
+				// in both MySQL and PostgreSQL. Emit a match-nothing predicate
+				// instead, matching squirrel.Eq's behavior for empty slices.
+				if len(ss) == 0 {
+					andExprs = append(andExprs, squirrel.Expr("1 = 0"))
+					continue
+				}
 				col := QualifyIdentifier(quote, k)
 				placeholders := make([]string, len(ss))
 				args := make([]interface{}, len(ss))
@@ -425,6 +432,8 @@ func (f *Filter) AddToSelect(sb squirrel.SelectBuilder, quote func(string) strin
 					args...,
 				))
 			default:
+				// squirrel.Eq renders an empty slice as a match-nothing
+				// predicate ("(1=0)"), so empty int lists are handled here.
 				andExprs = append(andExprs, squirrel.Eq{QualifyIdentifier(quote, k): v})
 			}
 		}
@@ -450,21 +459,13 @@ func (f *Filter) AddToSelect(sb squirrel.SelectBuilder, quote func(string) strin
 func checkPredicate(p *Predicate) error {
 	switch p.operation {
 	case apiv1beta1.Predicate_IN.String(), apiv2beta1.Predicate_IN.String():
+		// An empty list is intentionally allowed. It produces a match-nothing
+		// predicate in AddToSelect (see the IN handling there), preserving the
+		// historical behavior of returning an empty result page rather than an
+		// error for clients that build filters from an empty selection.
 		switch t := p.value.(type) {
 		case int32, int64, string:
 			return util.NewInvalidInputError("cannot use IN operator with scalar type %T", t)
-		case []int32:
-			if len(t) == 0 {
-				return util.NewInvalidInputError("IN operator requires at least one value")
-			}
-		case []int64:
-			if len(t) == 0 {
-				return util.NewInvalidInputError("IN operator requires at least one value")
-			}
-		case []string:
-			if len(t) == 0 {
-				return util.NewInvalidInputError("IN operator requires at least one value")
-			}
 		}
 	case apiv1beta1.Predicate_EQUALS.String(), apiv1beta1.Predicate_NOT_EQUALS.String(), apiv1beta1.Predicate_GREATER_THAN.String(), apiv1beta1.Predicate_GREATER_THAN_EQUALS.String(), apiv1beta1.Predicate_LESS_THAN.String(), apiv1beta1.Predicate_LESS_THAN_EQUALS.String(), apiv2beta1.Predicate_EQUALS.String(), apiv2beta1.Predicate_NOT_EQUALS.String(), apiv2beta1.Predicate_GREATER_THAN.String(), apiv2beta1.Predicate_GREATER_THAN_EQUALS.String(), apiv2beta1.Predicate_LESS_THAN.String(), apiv2beta1.Predicate_LESS_THAN_EQUALS.String():
 		switch t := p.value.(type) {

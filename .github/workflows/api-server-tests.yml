@@ -19,7 +19,7 @@ on:
     inputs:
       test_label:
         description: "Test label that you want to filter on and run"
-        default: "ApiServerTests"
+        default: 'ApiServerTests'
         required: true
         type: string
       number_of_parallel_tests:
@@ -35,21 +35,21 @@ on:
 
   pull_request:
     paths:
-      - ".github/workflows/api-server-tests.yml"
-      - ".github/workflows/image-builds.yml"
-      - ".github/actions/create-cluster/**"
-      - ".github/actions/deploy/**"
-      - ".github/actions/test-and-report/**"
-      - ".github/actions/junit-summary/**"
-      - ".github/resources/**"
-      - "backend/api/v2beta1/**"
-      - "backend/src/**"
-      - "backend/metadata_writer/**"
-      - "backend/test/v2/api/**"
-      - "manifests/kustomize/**"
-      - "test_data/sdk_compiled_pipelines/**"
-      - "!**/*.md"
-      - "!**/OWNERS"
+      - '.github/workflows/api-server-tests.yml'
+      - '.github/workflows/image-builds.yml'
+      - '.github/actions/create-cluster/**'
+      - '.github/actions/deploy/**'
+      - '.github/actions/test-and-report/**'
+      - '.github/actions/junit-summary/**'
+      - '.github/resources/**'
+      - 'backend/api/v2beta1/**'
+      - 'backend/src/**'
+      - 'backend/metadata_writer/**'
+      - 'backend/test/v2/api/**'
+      - 'manifests/kustomize/**'
+      - 'test_data/sdk_compiled_pipelines/**'
+      - '!**/*.md'
+      - '!**/OWNERS'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -66,27 +66,34 @@ jobs:
       contents: read
     strategy:
       matrix:
-        k8s_version: ["v1.36.1"]
-        cache_enabled: ["true", "false"]
-        proxy: ["true", "false"]
-        argo_version: ["v3.7.17", "v4.0.8"]
-        pipeline_store: ["database"]
-        pod_to_pod_tls_enabled: ["false"]
-        db_type: ["mysql", "pgx"]
+        k8s_version: [ "v1.36.1" ]
+        cache_enabled: [ "true", "false" ]
+        proxy: [ "true", "false" ]
+        argo_version: [ "v3.7.17", "v4.0.8" ]
+        pipeline_store: [ "database" ]
+        pod_to_pod_tls_enabled: [ "false" ]
+        db_type: [ "mysql", "pgx" ]
         include:
           - k8s_version: "v1.33.12"
             cache_enabled: "true"
-            argo_version: "v3.7.14"
+            argo_version: "v3.7.17"
             db_type: "mysql"
           - k8s_version: "v1.33.12"
             cache_enabled: "true"
-            argo_version: "v4.0.5"
+            argo_version: "v4.0.8"
             db_type: "mysql"
           - k8s_version: "v1.36.1"
             cache_enabled: "true"
             pod_to_pod_tls_enabled: "true"
             db_type: "mysql"
         exclude:
+          # PostgreSQL is intentionally scoped to the core path in this PR
+          # (cache_enabled=true, proxy=false, TLS off). The combinations below
+          # have no kustomize overlay yet and are rejected at deploy time by
+          # deploy-kfp.sh (see the pgx guard-rails), so they are unreachable
+          # rather than silently untested.
+          # TODO: add these overlays + matrix entries once PostgreSQL support
+          # is expanded beyond the core path.
           - db_type: "pgx"
             proxy: "true"
           - db_type: "pgx"
@@ -127,6 +134,7 @@ jobs:
           kubectl get secret kfp-api-tls-cert -n kubeflow -o jsonpath='{.data.ca\.crt}' | base64 -d > "${{ github.workspace }}/ca.crt"
           echo "CA_CERT_PATH=${{ github.workspace }}/ca.crt" >> "$GITHUB_ENV"
 
+
       - name: Configure Input Variables
         shell: bash
         id: configure
@@ -156,6 +164,7 @@ jobs:
             echo "NAMESPACE=$NAMESPACE"
           } >> "$GITHUB_OUTPUT"
 
+
       - name: Run Tests
         uses: ./.github/actions/test-and-report
         if: ${{ steps.configure.outcome == 'success' }}
@@ -175,6 +184,7 @@ jobs:
           tls_enabled: ${{ matrix.pod_to_pod_tls_enabled }}
           ca_cert_path: ${{ env.CA_CERT_PATH }}
 
+
   api-test-k8s-native:
     runs-on: ubuntu-latest
     permissions:
@@ -182,11 +192,11 @@ jobs:
       contents: read
     strategy:
       matrix:
-        k8s_version: ["v1.36.1", "v1.33.12"]
-        cache_enabled: ["true"]
-        uploadPipelinesWithKubernetesClient: ["true", "false"]
-        argo_version: ["v3.7.17", "v4.0.8"]
-        pipeline_store: ["kubernetes"]
+        k8s_version: [ "v1.36.1", "v1.33.12" ]
+        cache_enabled: [ "true" ]
+        uploadPipelinesWithKubernetesClient: [ "true", "false" ]
+        argo_version: [ "v3.7.17", "v4.0.8" ]
+        pipeline_store: [ "kubernetes" ]
       fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
     name: KFP API Server tests K8s Native API - K8sVersion=${{ matrix.k8s_version }} cacheEnabled=${{ matrix.cache_enabled }} argoVersion=${{ matrix.argo_version }} uploadPipelinesWithKubernetesClient=${{ matrix.uploadPipelinesWithKubernetesClient }}
 
@@ -228,6 +238,7 @@ jobs:
           python_version: ${{ env.PYTHON_VERSION }}
           report_name: "K8Native_k8sVersion=${{ matrix.k8s_version }}_cacheEnabled=${{ matrix.cache_enabled }}_argoVersion=${{ matrix.argo_version }}_uploadPipelinesWithKubernetesClient=${{ matrix.uploadPipelinesWithKubernetesClient }}"
 
+
   api-test-multi-user:
     runs-on: ubuntu-latest
     permissions:
@@ -239,17 +250,29 @@ jobs:
         # Complementary filters guarantee that every ApiServerTests spec runs
         # exactly once, while explicit cache labels divide the expensive run
         # matrix evenly between matching deployments.
+        # PostgreSQL is scoped to the core multi-user path (cache_enabled=true,
+        # artifact proxy off); other pgx combinations have no overlay yet and are
+        # rejected by deploy-kfp.sh.
+        # TODO: Add pgx + cache_enabled=false entry once a
+        # multiuser/postgresql/cache-disabled kustomize overlay is created.
         include:
           - k8s_version: "v1.36.1"
             cache_enabled: "true"
             multi_user: "true"
+            db_type: "mysql"
+            test_label: "ApiServerTests && (PipelineUpload || PipelineCacheEnabled)"
+          - k8s_version: "v1.36.1"
+            cache_enabled: "true"
+            multi_user: "true"
+            db_type: "pgx"
             test_label: "ApiServerTests && (PipelineUpload || PipelineCacheEnabled)"
           - k8s_version: "v1.36.1"
             cache_enabled: "false"
             multi_user: "true"
+            db_type: "mysql"
             test_label: "ApiServerTests && !(PipelineUpload || PipelineCacheEnabled)"
       fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
-    name: KFP API Server Multi User Tests - K8sVersion=${{ matrix.k8s_version }} cacheEnabled=${{ matrix.cache_enabled }} multiUser=${{ matrix.multi_user }}
+    name: KFP API Server Multi User Tests - K8sVersion=${{ matrix.k8s_version }} cacheEnabled=${{ matrix.cache_enabled }} multiUser=${{ matrix.multi_user }} dbType=${{ matrix.db_type }}
 
     steps:
       - name: Checkout code
@@ -269,6 +292,7 @@ jobs:
         with:
           cache_enabled: ${{ matrix.cache_enabled }}
           multi_user: ${{ matrix.multi_user }}
+          db_type: ${{ matrix.db_type }}
           image_path: images_${{ github.run_id }}
           image_tag: latest
           image_registry: kind-registry:5000
@@ -312,4 +336,4 @@ jobs:
           python_version: ${{ env.PYTHON_VERSION }}
           user_namespace: ${{ env.USER_NAMESPACE }}
           multi_user: ${{ matrix.multi_user }}
-          report_name: "MultiUser_k8sVersion=${{ matrix.k8s_version }}_cacheEnabled=${{ matrix.cache_enabled }}_multiUser=${{ matrix.multi_user }}"
+          report_name: "MultiUser_k8sVersion=${{ matrix.k8s_version }}_cacheEnabled=${{ matrix.cache_enabled }}_multiUser=${{ matrix.multi_user }}_dbType=${{ matrix.db_type }}"

@@ -339,18 +339,8 @@ func TestInvalidFiltersV1(t *testing.T) {
 		{
 			`predicates { key: "total" op: IN }`,
 		},
-		// Empty int list
-		{
-			`predicates { key: "total" op: IN int_values {} }`,
-		},
-		// Empty long list
-		{
-			`predicates { key: "total" op: IN long_values {} }`,
-		},
-		// Empty string list
-		{
-			`predicates { key: "label" op: IN string_values {} }`,
-		},
+		// Note: empty IN lists (int_values {}, long_values {}, string_values {})
+		// are intentionally NOT errors. They produce a match-nothing predicate.
 	}
 
 	for _, test := range tests {
@@ -424,18 +414,9 @@ func TestInvalidFilters(t *testing.T) {
 		{
 			`predicates { key: "total" operation: IN }`,
 		},
-		// Empty int list
-		{
-			`predicates { key: "total" operation: IN int_values {} }`,
-		},
-		// Empty long list
-		{
-			`predicates { key: "total" operation: IN long_values {} }`,
-		},
-		// Empty string list
-		{
-			`predicates { key: "label" operation: IN string_values {} }`,
-		},
+		// Note: empty IN lists (int_values {}, long_values {}, string_values {})
+		// are intentionally NOT errors. They produce a match-nothing predicate;
+		// see the empty-list cases in TestAddToSelect.
 	}
 
 	for _, test := range tests {
@@ -651,6 +632,24 @@ func TestAddToSelect(t *testing.T) {
 			`predicates { key: "label" operation: IN  string_values {values: "l1" values: "l2"}}`,
 			"SELECT mycolumn WHERE (LOWER(label) IN (LOWER(?), LOWER(?)))",
 			[]interface{}{"l1", "l2"},
+		},
+		// Empty IN lists must produce a match-nothing predicate ("1 = 0"),
+		// never invalid SQL such as "IN ()". This preserves the historical
+		// behavior of returning an empty result page for empty selections.
+		{
+			`predicates { key: "label" operation: IN string_values {} }`,
+			"SELECT mycolumn WHERE (1 = 0)",
+			nil,
+		},
+		{
+			`predicates { key: "total" operation: IN int_values {} }`,
+			"SELECT mycolumn WHERE ((1=0))",
+			nil,
+		},
+		{
+			`predicates { key: "runs" operation: IN long_values {} }`,
+			"SELECT mycolumn WHERE ((1=0))",
+			nil,
 		},
 		{
 			`predicates { key: "label" operation: IS_SUBSTRING  string_value: "label_substring" }`,
