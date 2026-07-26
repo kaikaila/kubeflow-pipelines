@@ -212,7 +212,7 @@ func (s *RunStore) buildSelectRunsQuery(selectCount bool, opts *list.Options,
 		sqlBuilder = s.addMetricsResourceReferencesAndTasks(sqlBuilder, opts)
 
 		// Convert metric value (string) to float64 for numeric comparison in SQL, generic for all DBs.
-		if opts != nil && opts.SortByMetricName != "" && opts.GetSortByFieldValue() != nil {
+		if opts != nil && opts.IsMetricSort() && opts.GetSortByFieldValue() != nil {
 			// Try to convert to float64 if it's a string
 			if strVal, ok := opts.GetSortByFieldValue().(string); ok {
 				if floatVal, err := strconv.ParseFloat(strVal, 64); err == nil {
@@ -359,13 +359,14 @@ func (s *RunStore) addMetricsResourceReferencesAndTasks(filteredSelectBuilder sq
 			LeftJoin(fmt.Sprintf("%s AS rm ON subq.%s=rm.%s",
 				q("run_metrics"), q("UUID"), q("RunUUID"))).
 			GroupBy("subq."+q("UUID"), "subq."+q("refs"), "subq."+q("taskDetails"))
-		if opts != nil && opts.SortByMetricName != "" {
-			// opts.SortByMetricName is validated in token.unmarshal() and passed as a
-			// bind parameter value — never as a SQL identifier — so it is injection-safe.
+		if opts != nil && opts.IsMetricSort() {
+			// For metric sorts opts.SortByFieldName holds the raw metric name. It is
+			// validated in token.unmarshal() and passed as a bind parameter value —
+			// never as a SQL identifier — so it is injection-safe.
 			// The alias uses the fixed constant MetricSortSQLAlias, not user input.
 			metricValueExtract := fmt.Sprintf("MAX(CASE WHEN rm.%s=? THEN rm.%s END) AS %s",
 				q("Name"), q("NumberValue"), q(model.MetricSortSQLAlias))
-			sb = sb.Column(sq.Expr(metricValueExtract, opts.SortByMetricName))
+			sb = sb.Column(sq.Expr(metricValueExtract, opts.SortByFieldName))
 		}
 		return sb
 	}()
@@ -378,7 +379,7 @@ func (s *RunStore) addMetricsResourceReferencesAndTasks(filteredSelectBuilder sq
 		"withmetrics."+q("taskDetails"),
 		"withmetrics."+q("metrics"))
 
-	if opts != nil && opts.SortByMetricName != "" {
+	if opts != nil && opts.IsMetricSort() {
 		joinedColumns = append(joinedColumns, "withmetrics."+q(model.MetricSortSQLAlias))
 	}
 
@@ -395,7 +396,7 @@ func (s *RunStore) addMetricsResourceReferencesAndTasks(filteredSelectBuilder sq
 
 	// Include metric sort column in SELECT when sorting by metric.
 	// MySQL/PostgreSQL require WHERE-referenced columns in SELECT list.
-	if opts != nil && opts.SortByMetricName != "" {
+	if opts != nil && opts.IsMetricSort() {
 		finalSelectColumns = append(finalSelectColumns, q(model.MetricSortSQLAlias))
 	}
 

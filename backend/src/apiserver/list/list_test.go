@@ -251,10 +251,10 @@ func TestNextPageToken_MetricValueNull(t *testing.T) {
 	inOpts := &Options{
 		PageSize: 10,
 		token: &token{
-			SortByFieldName:  model.MetricSortSQLAlias,
-			SortByMetricName: "accuracy",
-			KeyFieldName:     "PrimaryKey",
-			IsDesc:           true,
+			SortByFieldName: "accuracy",
+			SortBySQLColumn: model.MetricSortSQLAlias,
+			KeyFieldName:    "PrimaryKey",
+			IsDesc:          true,
 		},
 	}
 
@@ -285,10 +285,10 @@ func TestNextPageToken_MetricValuePresent(t *testing.T) {
 	inOpts := &Options{
 		PageSize: 10,
 		token: &token{
-			SortByFieldName:  model.MetricSortSQLAlias,
-			SortByMetricName: "accuracy",
-			KeyFieldName:     "PrimaryKey",
-			IsDesc:           true,
+			SortByFieldName: "accuracy",
+			SortBySQLColumn: model.MetricSortSQLAlias,
+			KeyFieldName:    "PrimaryKey",
+			IsDesc:          true,
 		},
 	}
 
@@ -429,6 +429,7 @@ func TestNewOptions_ValidSortOptions(t *testing.T) {
 					KeyFieldName:        "PrimaryKey",
 					KeyFieldPrefix:      "",
 					SortByFieldName:     "CreatedTimestamp",
+					SortBySQLColumn:     "CreatedTimestamp",
 					SortByFieldPrefix:   "",
 					SortByFieldIsString: false,
 					IsDesc:              false,
@@ -443,6 +444,7 @@ func TestNewOptions_ValidSortOptions(t *testing.T) {
 					KeyFieldName:        "PrimaryKey",
 					KeyFieldPrefix:      "",
 					SortByFieldName:     "CreatedTimestamp",
+					SortBySQLColumn:     "CreatedTimestamp",
 					SortByFieldPrefix:   "",
 					SortByFieldIsString: false,
 					IsDesc:              false,
@@ -457,6 +459,7 @@ func TestNewOptions_ValidSortOptions(t *testing.T) {
 					KeyFieldName:        "PrimaryKey",
 					KeyFieldPrefix:      "",
 					SortByFieldName:     "FakeName",
+					SortBySQLColumn:     "FakeName",
 					SortByFieldPrefix:   "",
 					SortByFieldIsString: true,
 					IsDesc:              false,
@@ -471,6 +474,7 @@ func TestNewOptions_ValidSortOptions(t *testing.T) {
 					KeyFieldName:        "PrimaryKey",
 					KeyFieldPrefix:      "",
 					SortByFieldName:     "FakeName",
+					SortBySQLColumn:     "FakeName",
 					SortByFieldPrefix:   "",
 					SortByFieldIsString: true,
 					IsDesc:              false,
@@ -485,6 +489,7 @@ func TestNewOptions_ValidSortOptions(t *testing.T) {
 					KeyFieldName:        "PrimaryKey",
 					KeyFieldPrefix:      "",
 					SortByFieldName:     "FakeName",
+					SortBySQLColumn:     "FakeName",
 					SortByFieldPrefix:   "",
 					SortByFieldIsString: true,
 					IsDesc:              true,
@@ -499,6 +504,7 @@ func TestNewOptions_ValidSortOptions(t *testing.T) {
 					KeyFieldName:        "PrimaryKey",
 					KeyFieldPrefix:      "",
 					SortByFieldName:     "PrimaryKey",
+					SortBySQLColumn:     "PrimaryKey",
 					SortByFieldPrefix:   "",
 					SortByFieldIsString: true,
 					IsDesc:              true,
@@ -526,9 +532,6 @@ func TestNewOptions_InvalidSortOptions(t *testing.T) {
 		{"unknownfield"},
 		{"timestamp descending"},
 		{"timestamp asc hello"},
-		// Metric names with invalid characters must be rejected on page 1.
-		{"metric:val/loss"}, // slash not allowed
-		{"metric:123bad"},   // must start with a letter
 	}
 
 	for _, test := range tests {
@@ -556,8 +559,16 @@ func TestNewOptions_ValidMetricSort(t *testing.T) {
 			t.Errorf("NewOptions(sortBy=%q) returned unexpected error: %v", test.sortBy, err)
 			continue
 		}
-		if got.SortByMetricName != test.wantMetricName {
-			t.Errorf("NewOptions(sortBy=%q) SortByMetricName = %q, want %q", test.sortBy, got.SortByMetricName, test.wantMetricName)
+		// Metric sorts carry the raw metric name in SortByFieldName and the fixed
+		// SQL alias in SortBySQLColumn.
+		if got.SortByFieldName != test.wantMetricName {
+			t.Errorf("NewOptions(sortBy=%q) SortByFieldName = %q, want %q", test.sortBy, got.SortByFieldName, test.wantMetricName)
+		}
+		if got.SortBySQLColumn != model.MetricSortSQLAlias {
+			t.Errorf("NewOptions(sortBy=%q) SortBySQLColumn = %q, want %q", test.sortBy, got.SortBySQLColumn, model.MetricSortSQLAlias)
+		}
+		if !got.IsMetricSort() {
+			t.Errorf("NewOptions(sortBy=%q) IsMetricSort() = false, want true", test.sortBy)
 		}
 	}
 }
@@ -603,6 +614,7 @@ func TestNewOptions_ValidFilter(t *testing.T) {
 			KeyFieldName:        "PrimaryKey",
 			KeyFieldPrefix:      "",
 			SortByFieldName:     "CreatedTimestamp",
+			SortBySQLColumn:     "CreatedTimestamp",
 			SortByFieldPrefix:   "",
 			SortByFieldIsString: false,
 			IsDesc:              false,
@@ -673,6 +685,7 @@ func TestNewOptions_ModelFilter(t *testing.T) {
 		token: &token{
 			KeyFieldName:        "UUID",
 			SortByFieldName:     "DisplayName",
+			SortBySQLColumn:     "DisplayName",
 			SortByFieldIsString: true,
 			IsDesc:              false,
 			Filter:              f,
@@ -716,6 +729,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:   "SortField",
+					SortBySQLColumn:   "SortField",
 					SortByFieldValue:  "value",
 					SortByFieldPrefix: "",
 					KeyFieldName:      "KeyField",
@@ -732,6 +746,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:   "SortField",
+					SortBySQLColumn:   "SortField",
 					SortByFieldValue:  "value",
 					SortByFieldPrefix: "",
 					KeyFieldName:      "KeyField",
@@ -748,6 +763,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:   "SortField",
+					SortBySQLColumn:   "SortField",
 					SortByFieldValue:  "value",
 					SortByFieldPrefix: "",
 					KeyFieldName:      "KeyField",
@@ -765,6 +781,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:     "SortField",
+					SortBySQLColumn:     "SortField",
 					SortByFieldIsString: true,
 					SortByFieldPrefix:   "",
 					KeyFieldName:        "KeyField",
@@ -788,6 +805,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:     "CreatedAtInSec",
+					SortBySQLColumn:     "CreatedAtInSec",
 					SortByFieldIsString: false,
 					SortByFieldPrefix:   "",
 					KeyFieldName:        "KeyField",
@@ -805,6 +823,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:     "CreatedAtInSec",
+					SortBySQLColumn:     "CreatedAtInSec",
 					SortByFieldIsString: false,
 					SortByFieldValue:    float64(1234567890),
 					SortByFieldPrefix:   "",
@@ -822,6 +841,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:   "SortField",
+					SortBySQLColumn:   "SortField",
 					SortByFieldValue:  "value",
 					SortByFieldPrefix: "",
 					KeyFieldName:      "KeyField",
@@ -837,6 +857,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:   "SortField",
+					SortBySQLColumn:   "SortField",
 					SortByFieldValue:  "value",
 					SortByFieldPrefix: "",
 					KeyFieldName:      "KeyField",
@@ -854,6 +875,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:     "MetricValue",
+					SortBySQLColumn:     "MetricValue",
 					SortByFieldIsString: false,
 					SortByFieldValue:    float64(0.123456789),
 					SortByFieldPrefix:   "",
@@ -871,6 +893,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 				PageSize: 123,
 				token: &token{
 					SortByFieldName:     "MetricValue",
+					SortBySQLColumn:     "MetricValue",
 					SortByFieldIsString: false,
 					SortByFieldValue:    float64(0.123456789),
 					SortByFieldPrefix:   "",
@@ -890,8 +913,8 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 			in: &Options{
 				PageSize: 123,
 				token: &token{
-					SortByFieldName:     model.MetricSortSQLAlias,
-					SortByMetricName:    "accuracy",
+					SortByFieldName:     "accuracy",
+					SortBySQLColumn:     model.MetricSortSQLAlias,
 					SortByFieldIsString: false,
 					SortByFieldValue:    float64(0.5),
 					KeyFieldName:        "KeyField",
@@ -907,8 +930,8 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 			in: &Options{
 				PageSize: 123,
 				token: &token{
-					SortByFieldName:     model.MetricSortSQLAlias,
-					SortByMetricName:    "accuracy",
+					SortByFieldName:     "accuracy",
+					SortBySQLColumn:     model.MetricSortSQLAlias,
 					SortByFieldIsString: false,
 					SortByFieldValue:    float64(0.5),
 					KeyFieldName:        "KeyField",
@@ -925,8 +948,8 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 			in: &Options{
 				PageSize: 123,
 				token: &token{
-					SortByFieldName:   model.MetricSortSQLAlias,
-					SortByMetricName:  "accuracy",
+					SortByFieldName:   "accuracy",
+					SortBySQLColumn:   model.MetricSortSQLAlias,
 					SortByFieldIsNull: true,
 					KeyFieldName:      "KeyField",
 					KeyFieldValue:     "uuid-9",
@@ -941,8 +964,8 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 			in: &Options{
 				PageSize: 123,
 				token: &token{
-					SortByFieldName:   model.MetricSortSQLAlias,
-					SortByMetricName:  "accuracy",
+					SortByFieldName:   "accuracy",
+					SortBySQLColumn:   model.MetricSortSQLAlias,
 					SortByFieldIsNull: true,
 					KeyFieldName:      "KeyField",
 					KeyFieldValue:     "uuid-9",
@@ -1066,13 +1089,13 @@ func TestTokenSerialization(t *testing.T) {
 }
 
 func TestUnmarshalInvalidMetricNameRoundTrip(t *testing.T) {
-	// A tampered or legacy token may carry a metric name that is now invalid
-	// (e.g. contains a slash). unmarshal must reject it so that page 2 never
-	// silently accepts what page 1 would reject after the NewOptions fix.
+	// A tampered token may carry a metric name that fails the metric-name
+	// pattern (e.g. contains a slash). unmarshal must reject it before the
+	// value is used anywhere.
 	badToken := token{
-		SortByFieldName:  model.MetricSortSQLAlias,
-		SortByMetricName: "val/loss",
-		KeyFieldName:     "UUID",
+		SortByFieldName: "val/loss",
+		SortBySQLColumn: model.MetricSortSQLAlias,
+		KeyFieldName:    "UUID",
 	}
 	s, err := badToken.marshal()
 	if err != nil {
@@ -1084,39 +1107,45 @@ func TestUnmarshalInvalidMetricNameRoundTrip(t *testing.T) {
 	}
 }
 
-func TestUnmarshalLegacyTokenMigration(t *testing.T) {
-	// Legacy tokens stored the user-supplied metric name (e.g. "log-loss") in
-	// SortByFieldName and left SortByMetricName empty. unmarshal must migrate
-	// them to the new layout without returning an error.
-	legacyToken := token{
-		SortByFieldName:   "log-loss",
-		SortByFieldPrefix: "pipeline_runs.",
-		KeyFieldPrefix:    "pipeline_runs.",
-		KeyFieldName:      "UUID",
-		KeyFieldValue:     "abc",
-		IsDesc:            false,
-	}
-	s, err := legacyToken.marshal()
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+func TestUnmarshalMetricSortToken(t *testing.T) {
+	// Metric-sort tokens carry the raw metric name in SortByFieldName and the
+	// fixed alias in SortBySQLColumn. unmarshal must accept them as-is — both
+	// identifier-like names ("accuracy") and hyphenated ones ("log-loss") —
+	// with no migration or mutation of any field.
+	for _, metricName := range []string{"accuracy", "log-loss"} {
+		t.Run(metricName, func(t *testing.T) {
+			tok := token{
+				SortByFieldName:   metricName,
+				SortBySQLColumn:   model.MetricSortSQLAlias,
+				SortByFieldValue:  0.5,
+				SortByFieldPrefix: "",
+				KeyFieldName:      "UUID",
+				KeyFieldValue:     "abc",
+				KeyFieldPrefix:    "pipeline_runs.",
+				IsDesc:            false,
+			}
+			s, err := tok.marshal()
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
 
-	got := &token{}
-	if err := got.unmarshal(s); err != nil {
-		t.Fatalf("unmarshal legacy token: %v", err)
-	}
+			got := &token{}
+			if err := got.unmarshal(s); err != nil {
+				t.Fatalf("unmarshal metric sort token: %v", err)
+			}
 
-	if got.SortByFieldName != model.MetricSortSQLAlias {
-		t.Errorf("SortByFieldName = %q, want %q", got.SortByFieldName, model.MetricSortSQLAlias)
-	}
-	if got.SortByMetricName != "log-loss" {
-		t.Errorf("SortByMetricName = %q, want %q", got.SortByMetricName, "log-loss")
-	}
-	if got.SortByFieldPrefix != "pipeline_runs" {
-		t.Errorf("SortByFieldPrefix = %q, want trailing dot stripped", got.SortByFieldPrefix)
-	}
-	if got.KeyFieldPrefix != "pipeline_runs" {
-		t.Errorf("KeyFieldPrefix = %q, want trailing dot stripped", got.KeyFieldPrefix)
+			if got.SortByFieldName != metricName {
+				t.Errorf("SortByFieldName = %q, want %q", got.SortByFieldName, metricName)
+			}
+			if got.SortBySQLColumn != model.MetricSortSQLAlias {
+				t.Errorf("SortBySQLColumn = %q, want %q", got.SortBySQLColumn, model.MetricSortSQLAlias)
+			}
+			// Prefixes are stored with their trailing dot and left untouched;
+			// the dot is stripped only at SQL build time (see qualifyColumn).
+			if got.KeyFieldPrefix != "pipeline_runs." {
+				t.Errorf("KeyFieldPrefix = %q, want %q", got.KeyFieldPrefix, "pipeline_runs.")
+			}
+		})
 	}
 }
 
@@ -1179,16 +1208,18 @@ func TestMatches(t *testing.T) {
 			o2:   &Options{token: &token{Filter: f2}},
 			want: false,
 		},
-		// Metric sort: same SQL alias but different metric names are distinct queries.
+		// Metric sort: SortByFieldName holds the raw metric name, so tokens for
+		// different metrics are distinct queries even though they share the same
+		// SQL alias in SortBySQLColumn.
 		{
-			o1:   &Options{token: &token{SortByFieldName: "sort_metric_value", SortByMetricName: "accuracy"}},
-			o2:   &Options{token: &token{SortByFieldName: "sort_metric_value", SortByMetricName: "log-loss"}},
+			o1:   &Options{token: &token{SortByFieldName: "accuracy", SortBySQLColumn: model.MetricSortSQLAlias}},
+			o2:   &Options{token: &token{SortByFieldName: "log-loss", SortBySQLColumn: model.MetricSortSQLAlias}},
 			want: false,
 		},
-		// Metric sort: same SQL alias and same metric name are the same query.
+		// Metric sort: same metric name is the same query.
 		{
-			o1:   &Options{token: &token{SortByFieldName: "sort_metric_value", SortByMetricName: "accuracy"}},
-			o2:   &Options{token: &token{SortByFieldName: "sort_metric_value", SortByMetricName: "accuracy"}},
+			o1:   &Options{token: &token{SortByFieldName: "accuracy", SortBySQLColumn: model.MetricSortSQLAlias}},
+			o2:   &Options{token: &token{SortByFieldName: "accuracy", SortBySQLColumn: model.MetricSortSQLAlias}},
 			want: true,
 		},
 	}

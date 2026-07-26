@@ -388,12 +388,30 @@ func TestListRuns_Pagination_WithSortingOnMetrics(t *testing.T) {
 }
 
 func TestListRuns_MetricSortInjectionSafe(t *testing.T) {
-	// Malicious sortBy payload must be rejected at validation time by NewOptions,
-	// never reaching SQL generation.
-	maliciousSort := "metric:';DROP/**/TABLE/**/run_metrics;--"
-	_, err := list.NewOptions(&model.Run{}, 10, maliciousSort, nil)
-	assert.NotNil(t, err, "NewOptions must reject invalid metric names")
-	assert.Contains(t, err.Error(), "Invalid metric name")
+	// An injection-shaped metric name is not rejected on page 1: the raw metric
+	// name only ever reaches SQL as a bind parameter, so parameterization — not
+	// name validation — is what keeps query structure safe.
+	db, _, runStore := initializeRunStore()
+	defer db.Close()
+
+	// Lowercase because NewOptions lowercases the whole sort_by expression.
+	maliciousMetric := "';drop/**/table/**/run_metrics;--"
+	opts, err := list.NewOptions(&model.Run{}, 10, "metric:"+maliciousMetric, nil)
+	assert.Nil(t, err, "NewOptions must accept the metric name; it is only used as a bind value")
+
+	sql, args, err := runStore.buildSelectRunsQuery(false, opts,
+		&model.FilterContext{ReferenceKey: &model.ReferenceKey{Type: model.ExperimentResourceType, ID: defaultFakeExpId}})
+	assert.Nil(t, err)
+	assert.NotContains(t, sql, maliciousMetric, "metric name must never be spliced into SQL text")
+	assert.Contains(t, args, maliciousMetric, "metric name must be passed as a bind parameter")
+
+	// Page 2 is where the name is validated: a forged page token carrying the
+	// same payload must be rejected by token unmarshalling.
+	forged := base64.StdEncoding.EncodeToString(fmt.Appendf(nil,
+		`{"KeyFieldName":"UUID","SortByFieldName":%q,"SortBySQLColumn":%q}`,
+		maliciousMetric, model.MetricSortSQLAlias))
+	_, err = list.NewOptionsFromToken(forged, 10)
+	assert.NotNil(t, err, "page token with an invalid metric name must be rejected")
 }
 
 // TestListRuns_HyphenatedMetricSort verifies that metric names containing
