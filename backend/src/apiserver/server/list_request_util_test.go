@@ -361,6 +361,10 @@ func (f *fakeListable) GetKeyFieldPrefix() string {
 	return ""
 }
 
+func (f *fakeListable) CaseInsensitiveFields() map[string]struct{} {
+	return map[string]struct{}{"name": {}}
+}
+
 func TestValidatedListOptions_Errors(t *testing.T) {
 	opts, err := list.NewOptions(&fakeListable{}, 10, "name asc", nil)
 	if err != nil {

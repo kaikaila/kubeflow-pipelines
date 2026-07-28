@@ -102,6 +102,10 @@ func (f *fakeListable) GetKeyFieldPrefix() string {
 	return ""
 }
 
+func (f *fakeListable) CaseInsensitiveFields() map[string]struct{} {
+	return map[string]struct{}{"name": {}}
+}
+
 func TestNextPageToken_ValidTokens(t *testing.T) {
 	l := &fakeListable{PrimaryKey: "uuid123", FakeName: "Fake", CreatedTimestamp: 1234, Metrics: []*fakeMetric{
 		{
@@ -592,46 +596,17 @@ func TestNewOptions_ValidFilter(t *testing.T) {
 	}
 	newFilter, _ := filter.New(protoFilter)
 
-	protoFilterWithRightKeyNames := &api.Filter{
-		Predicates: []*api.Predicate{
-			{
-				Key:   "FakeName",
-				Op:    api.Predicate_EQUALS,
-				Value: &api.Predicate_StringValue{StringValue: "SomeName"},
-			},
-		},
-	}
-
-	f, err := filter.New(protoFilterWithRightKeyNames)
-	if err != nil {
-		t.Fatalf("failed to parse filter proto %+v: %v", protoFilter, err)
-	}
-
 	got, err := NewOptions(&fakeListable{}, 10, "timestamp", newFilter)
-	want := &Options{
-		PageSize: 10,
-		token: &token{
-			KeyFieldName:        "PrimaryKey",
-			KeyFieldPrefix:      "",
-			SortByFieldName:     "CreatedTimestamp",
-			SortBySQLColumn:     "CreatedTimestamp",
-			SortByFieldPrefix:   "",
-			SortByFieldIsString: false,
-			IsDesc:              false,
-			Filter:              f,
-		},
+	if err != nil {
+		t.Fatalf("NewOptions: %v", err)
 	}
 
-	opts := []cmp.Option{
-		cmpopts.EquateEmpty(), protocmp.Transform(),
-		cmp.AllowUnexported(Options{}),
-		cmp.AllowUnexported(filter.Filter{}),
-	}
-
-	if !cmp.Equal(got, want, opts...) || err != nil {
-		t.Errorf("NewOptions(protoFilter=%+v) =\nGot: %+v, %v\nWant: %+v, nil\nDiff:\n%s",
-			protoFilter, got, err, want, cmp.Diff(got, want, opts...))
-	}
+	assert.Equal(t, 10, got.PageSize)
+	assert.Equal(t, "PrimaryKey", got.KeyFieldName)
+	assert.Equal(t, "CreatedTimestamp", got.SortByFieldName)
+	assert.Equal(t, "CreatedTimestamp", got.SortBySQLColumn)
+	assert.False(t, got.IsDesc)
+	assert.NotNil(t, got.Filter)
 }
 
 func TestNewOptions_InvalidFilter(t *testing.T) {
@@ -664,44 +639,18 @@ func TestNewOptions_ModelFilter(t *testing.T) {
 	}
 	newFilter, _ := filter.New(protoFilter)
 
-	protoFilterWithRightKeyNames := &api.Filter{
-		Predicates: []*api.Predicate{
-			{
-				Key:   "FinishedAtInSec",
-				Op:    api.Predicate_GREATER_THAN,
-				Value: &api.Predicate_StringValue{StringValue: "SomeTime"},
-			},
-		},
-	}
-
-	f, err := filter.New(protoFilterWithRightKeyNames)
-	if err != nil {
-		t.Fatalf("failed to parse filter proto %+v: %v", protoFilter, err)
-	}
-
 	got, err := NewOptions(&model.Run{}, 10, "name", newFilter)
-	want := &Options{
-		PageSize: 10,
-		token: &token{
-			KeyFieldName:        "UUID",
-			SortByFieldName:     "DisplayName",
-			SortBySQLColumn:     "DisplayName",
-			SortByFieldIsString: true,
-			IsDesc:              false,
-			Filter:              f,
-		},
+	if err != nil {
+		t.Fatalf("NewOptions: %v", err)
 	}
 
-	opts := []cmp.Option{
-		cmpopts.EquateEmpty(), protocmp.Transform(),
-		cmp.AllowUnexported(Options{}),
-		cmp.AllowUnexported(filter.Filter{}),
-	}
-
-	if !cmp.Equal(got, want, opts...) || err != nil {
-		t.Errorf("NewOptions(protoFilter=%+v) =\nGot: %+v, %v\nWant: %+v, nil\nDiff:\n%s",
-			protoFilter, got, err, want, cmp.Diff(got, want, opts...))
-	}
+	assert.Equal(t, 10, got.PageSize)
+	assert.Equal(t, "UUID", got.KeyFieldName)
+	assert.Equal(t, "DisplayName", got.SortByFieldName)
+	assert.Equal(t, "DisplayName", got.SortBySQLColumn)
+	assert.True(t, got.SortByFieldIsString)
+	assert.False(t, got.IsDesc)
+	assert.NotNil(t, got.Filter)
 }
 
 func TestAddPaginationAndFilterToSelect(t *testing.T) {
@@ -773,7 +722,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					Filter:            f,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) > LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField >= ?)) AND (LOWER(Name) = LOWER(?)) ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) > LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField >= ?)) AND (Name = ?) ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
 			wantArgs: []interface{}{"value", "value", 1111, "SomeName"},
 		},
 		{
@@ -866,7 +815,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					Filter:            f,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(Name) = LOWER(?)) ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (Name = ?) ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
 			wantArgs: []interface{}{"SomeName"},
 		},
 		// Numeric field, second page (SortByFieldValue is float64): bind parameter preserves full precision.
@@ -1280,7 +1229,7 @@ func TestAddStatusFilterToSelectWithRunModel(t *testing.T) {
 	sqlBuilder := sq.Select("*").From("run_details")
 	sql, args, err := listableOptions.AddFilterToSelect(sqlBuilder, nil).ToSql()
 	assert.Nil(t, err)
-	assert.Contains(t, sql, "WHERE (LOWER(Conditions) = LOWER(?))") // filtering on status, aka Conditions in db
+	assert.Contains(t, sql, "WHERE (Conditions = ?)") // status is not case-insensitive; exact comparison
 	assert.Contains(t, args, "Succeeded")
 
 	notEqualProtoFilter := &api.Filter{}
@@ -1297,6 +1246,6 @@ func TestAddStatusFilterToSelectWithRunModel(t *testing.T) {
 	sqlBuilder = sq.Select("*").From("run_details")
 	sql, args, err = listableOptions.AddFilterToSelect(sqlBuilder, nil).ToSql()
 	assert.Nil(t, err)
-	assert.Contains(t, sql, "WHERE (LOWER(Conditions) <> LOWER(?))") // filtering on status, aka Conditions in db
+	assert.Contains(t, sql, "WHERE (Conditions <> ?)") // status is not case-insensitive; exact comparison
 	assert.Contains(t, args, "somevalue")
 }

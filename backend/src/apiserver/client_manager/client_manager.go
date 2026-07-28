@@ -392,6 +392,8 @@ func InitDBClient(initConnectionTimeout time.Duration) (*sql.DB, sqldrv.DBDialec
 		util.TerminateIfError(autoMigrate(db))
 	}
 
+	util.TerminateIfError(createExpressionIndexes(db, dbDialect))
+
 	newdb, err := db.DB()
 	if err != nil {
 		glog.Fatalf("Failed to retrieve *sql.DB from gorm.DB. Error: %v", err)
@@ -967,6 +969,36 @@ func addDisplayNameColumn(db *gorm.DB, mdl interface{}, dialect sqldrv.DBDialect
 		}
 		return nil
 	})
+}
+
+// createExpressionIndexes creates PostgreSQL expression indexes on LOWER(Name)
+// for tables whose existing Name indexes are bypassed by the LOWER() wrapping
+// in filter queries. Only runs on PostgreSQL (pgx); other dialects are no-ops.
+func createExpressionIndexes(db *gorm.DB, dialect sqldrv.DBDialect) error {
+	if dialect.Name() != "pgx" {
+		return nil
+	}
+	q := dialect.QuoteIdentifier
+	indexes := []struct {
+		name  string
+		table string
+		col   string
+	}{
+		{"idx_experiments_lower_name", "experiments", "Name"},
+		{"idx_pipelines_lower_name", "pipelines", "Name"},
+		{"idx_pipeline_versions_lower_name", "pipeline_versions", "Name"},
+	}
+	for _, idx := range indexes {
+		stmt := fmt.Sprintf(
+			"CREATE INDEX IF NOT EXISTS %s ON %s (LOWER(%s))",
+			q(idx.name), q(idx.table), q(idx.col),
+		)
+		if err := db.Exec(stmt).Error; err != nil {
+			return fmt.Errorf("failed to create expression index %s: %w", idx.name, err)
+		}
+		glog.Infof("Ensured expression index %s on %s(LOWER(%s))", idx.name, idx.table, idx.col)
+	}
+	return nil
 }
 
 func initBlobObjectStore(ctx context.Context, initConnectionTimeout time.Duration) (storage.ObjectStore, error) {

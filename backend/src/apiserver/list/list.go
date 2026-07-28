@@ -299,7 +299,7 @@ func NewOptions(listable Listable, pageSize int, sortBy string, filter *filter.F
 
 	// Filtering.
 	if filter != nil {
-		if err := filter.ReplaceKeys(listable.APIToModelFieldMap(), listable.GetModelName()); err != nil {
+		if err := filter.ReplaceKeys(listable.APIToModelFieldMap(), listable.GetModelName(), listable.CaseInsensitiveFields()); err != nil {
 			return nil, err
 		}
 		token.Filter = filter
@@ -528,6 +528,11 @@ type Listable interface {
 	GetField(name string) (fieldName string, sqlColumn string, ok bool)
 	// Find the value of a given field in a listable object.
 	GetFieldValue(name string) interface{}
+	// CaseInsensitiveFields returns the set of API field names that should use
+	// case-insensitive comparison (LOWER() in SQL, EqualFold in-memory).
+	// Only user-facing text fields (name, display_name, description) belong
+	// here; identifiers, UUIDs, and enum fields should use exact comparison.
+	CaseInsensitiveFields() map[string]struct{}
 }
 
 // NextPageToken returns a string that can be used to fetch the subsequent set

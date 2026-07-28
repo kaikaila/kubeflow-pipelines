@@ -51,6 +51,21 @@ type Filter struct {
 	in map[string][]interface{}
 
 	substring map[string][]interface{}
+
+	// caseInsensitiveKeys holds the set of qualified column names (e.g.
+	// "pipelines.Name") for which EQ/NEQ/IN comparisons should use
+	// case-insensitive semantics (LOWER() in SQL, EqualFold in-memory).
+	// Fields not in this set use exact comparison.
+	// SUBSTRING always uses case-insensitive semantics regardless.
+	caseInsensitiveKeys map[string]struct{}
+}
+
+func (f *Filter) isCaseInsensitive(key string) bool {
+	if f.caseInsensitiveKeys == nil {
+		return false
+	}
+	_, ok := f.caseInsensitiveKeys[key]
+	return ok
 }
 
 // filterForMarshaling is a helper struct for marshaling Filter into JSON. This
@@ -66,19 +81,22 @@ type filterForMarshaling struct {
 	IN map[string][]interface{}
 
 	SUBSTRING map[string][]interface{}
+
+	CaseInsensitiveKeys map[string]struct{} `json:",omitempty"`
 }
 
 // MarshalJSON implements JSON Marshaler for Filter.
 func (f *Filter) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&filterForMarshaling{
-		EQ:        f.eq,
-		NEQ:       f.neq,
-		GT:        f.gt,
-		GTE:       f.gte,
-		LT:        f.lt,
-		LTE:       f.lte,
-		IN:        f.in,
-		SUBSTRING: f.substring,
+		EQ:                  f.eq,
+		NEQ:                 f.neq,
+		GT:                  f.gt,
+		GTE:                 f.gte,
+		LT:                  f.lt,
+		LTE:                 f.lte,
+		IN:                  f.in,
+		SUBSTRING:           f.substring,
+		CaseInsensitiveKeys: f.caseInsensitiveKeys,
 	})
 }
 
@@ -98,6 +116,7 @@ func (f *Filter) UnmarshalJSON(b []byte) error {
 	f.lte = ffm.LTE
 	f.in = ffm.IN
 	f.substring = ffm.SUBSTRING
+	f.caseInsensitiveKeys = ffm.CaseInsensitiveKeys
 
 	// json.Unmarshal decodes JSON arrays into []interface{}.
 	// These codes normalize them back to []string when possible,
@@ -201,12 +220,25 @@ func (f *Filter) ValidateKeys(validator func(segment string) error) error {
 	return nil
 }
 
-// Replaces and adds a prefix to the keys for an existing filter.
-// This is useful when someone wants to extend the filter with a table name.
-func (f *Filter) ReplaceKeys(keyMap map[string]string, prefix string) error {
+// ReplaceKeys replaces API field names with qualified column names and builds
+// the case-insensitive key set. caseInsensitiveAPIFields contains the API-level
+// field names (e.g. "name", "display_name") that should use case-insensitive
+// comparison; it may be nil when no fields need this treatment.
+func (f *Filter) ReplaceKeys(keyMap map[string]string, prefix string, caseInsensitiveAPIFields map[string]struct{}) error {
 	if prefix != "" {
 		prefix = prefix + "."
 	}
+
+	// Build the case-insensitive key set using qualified column names.
+	if len(caseInsensitiveAPIFields) > 0 {
+		f.caseInsensitiveKeys = make(map[string]struct{})
+		for apiField := range caseInsensitiveAPIFields {
+			if colName, ok := keyMap[apiField]; ok {
+				f.caseInsensitiveKeys[prefix+colName] = struct{}{}
+			}
+		}
+	}
+
 	if err := replaceMapKeys(f.eq, keyMap, prefix); err != nil {
 		return err
 	}
@@ -266,8 +298,14 @@ func (f *Filter) matchesFilter(getField func(string) interface{}) (bool, error) 
 	for k := range f.eq {
 		fieldVal := fmt.Sprint(getField(k))
 		for _, v := range f.eq[k] {
-			if !strings.EqualFold(fieldVal, fmt.Sprint(v)) {
-				return false, nil
+			if f.isCaseInsensitive(k) {
+				if !strings.EqualFold(fieldVal, fmt.Sprint(v)) {
+					return false, nil
+				}
+			} else {
+				if fieldVal != fmt.Sprint(v) {
+					return false, nil
+				}
 			}
 		}
 	}
@@ -276,8 +314,14 @@ func (f *Filter) matchesFilter(getField func(string) interface{}) (bool, error) 
 	for k := range f.neq {
 		fieldVal := fmt.Sprint(getField(k))
 		for _, v := range f.neq[k] {
-			if strings.EqualFold(fieldVal, fmt.Sprint(v)) {
-				return false, nil
+			if f.isCaseInsensitive(k) {
+				if strings.EqualFold(fieldVal, fmt.Sprint(v)) {
+					return false, nil
+				}
+			} else {
+				if fieldVal == fmt.Sprint(v) {
+					return false, nil
+				}
 			}
 		}
 	}
@@ -301,6 +345,7 @@ func (f *Filter) matchesFilter(getField func(string) interface{}) (bool, error) 
 	// IN: field must be a member of all provided IN lists for the same key (AND semantics across lists)
 	for k := range f.in {
 		fieldVal := fmt.Sprint(getField(k))
+		caseInsensitive := f.isCaseInsensitive(k)
 		for _, list := range f.in[k] {
 			inOne := false
 			rv := reflect.ValueOf(list)
@@ -308,9 +353,17 @@ func (f *Filter) matchesFilter(getField func(string) interface{}) (bool, error) 
 				return false, nil
 			}
 			for i := 0; i < rv.Len(); i++ {
-				if strings.EqualFold(fieldVal, fmt.Sprint(rv.Index(i).Interface())) {
-					inOne = true
-					break
+				elemVal := fmt.Sprint(rv.Index(i).Interface())
+				if caseInsensitive {
+					if strings.EqualFold(fieldVal, elemVal) {
+						inOne = true
+						break
+					}
+				} else {
+					if fieldVal == elemVal {
+						inOne = true
+						break
+					}
 				}
 			}
 			if !inOne {
@@ -361,7 +414,7 @@ func (f *Filter) AddToSelect(sb squirrel.SelectBuilder, quote func(string) strin
 
 	for k, vs := range f.eq {
 		for _, v := range vs {
-			if s, ok := v.(string); ok {
+			if s, ok := v.(string); ok && f.isCaseInsensitive(k) {
 				col := QualifyIdentifier(quote, k)
 				andExprs = append(andExprs, squirrel.Expr(
 					fmt.Sprintf("LOWER(%s) = LOWER(?)", col), s,
@@ -374,7 +427,7 @@ func (f *Filter) AddToSelect(sb squirrel.SelectBuilder, quote func(string) strin
 
 	for k, vs := range f.neq {
 		for _, v := range vs {
-			if s, ok := v.(string); ok {
+			if s, ok := v.(string); ok && f.isCaseInsensitive(k) {
 				col := QualifyIdentifier(quote, k)
 				andExprs = append(andExprs, squirrel.Expr(
 					fmt.Sprintf("LOWER(%s) <> LOWER(?)", col), s,
@@ -420,17 +473,21 @@ func (f *Filter) AddToSelect(sb squirrel.SelectBuilder, quote func(string) strin
 					andExprs = append(andExprs, squirrel.Expr("1 = 0"))
 					continue
 				}
-				col := QualifyIdentifier(quote, k)
-				placeholders := make([]string, len(ss))
-				args := make([]interface{}, len(ss))
-				for i, s := range ss {
-					placeholders[i] = "LOWER(?)"
-					args[i] = s
+				if f.isCaseInsensitive(k) {
+					col := QualifyIdentifier(quote, k)
+					placeholders := make([]string, len(ss))
+					args := make([]interface{}, len(ss))
+					for i, s := range ss {
+						placeholders[i] = "LOWER(?)"
+						args[i] = s
+					}
+					andExprs = append(andExprs, squirrel.Expr(
+						fmt.Sprintf("LOWER(%s) IN (%s)", col, strings.Join(placeholders, ", ")),
+						args...,
+					))
+				} else {
+					andExprs = append(andExprs, squirrel.Eq{QualifyIdentifier(quote, k): ss})
 				}
-				andExprs = append(andExprs, squirrel.Expr(
-					fmt.Sprintf("LOWER(%s) IN (%s)", col, strings.Join(placeholders, ", ")),
-					args...,
-				))
 			default:
 				// squirrel.Eq renders an empty slice as a match-nothing
 				// predicate ("(1=0)"), so empty int lists are handled here.
