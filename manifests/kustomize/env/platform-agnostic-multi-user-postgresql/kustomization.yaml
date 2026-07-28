@@ -10,6 +10,7 @@ resources:
   - ../../base/metadata/options/istio
   - ../../third-party/argo/installs/cluster
   - ../../third-party/postgresql/base
+  - ../../third-party/postgresql/options/istio
   - ../../third-party/seaweedfs/istio
 
 patches:

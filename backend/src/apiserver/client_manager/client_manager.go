@@ -38,6 +38,7 @@ import (
 	"github.com/kubeflow/pipelines/backend/src/apiserver/auth"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/client"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/common"
+	commonsql "github.com/kubeflow/pipelines/backend/src/apiserver/common/sql"
 	sqldrv "github.com/kubeflow/pipelines/backend/src/apiserver/common/sql/dialect"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/model"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/storage"
@@ -410,7 +411,7 @@ func initDBDriver(driverName string, initConnectionTimeout time.Duration) string
 	var pgxConfig *pgxStd.ConnConfig
 	switch driverName {
 	case "mysql":
-		mysqlConfig = client.CreateMySQLConfig(
+		mysqlConfig = commonsql.CreateMySQLConfig(
 			common.GetStringConfigWithDefault(mysqlUser, "root"),
 			common.GetStringConfigWithDefault(mysqlPassword, ""),
 			common.GetStringConfigWithDefault(mysqlServiceHost, "mysql"),
@@ -423,7 +424,7 @@ func initDBDriver(driverName string, initConnectionTimeout time.Duration) string
 		dbName = common.GetStringConfig(mysqlDBName)
 	case "pgx":
 		var pgxConfigErr error
-		pgxConfig, _, pgxConfigErr = client.CreatePostgreSQLConfig(
+		pgxConfig, _, pgxConfigErr = commonsql.CreatePostgreSQLConfig(
 			common.GetStringConfigWithDefault(postgresUser, "user"),
 			common.GetStringConfigWithDefault(postgresPassword, "password"),
 			common.GetStringConfigWithDefault(postgresHost, "postgresql"),
@@ -488,7 +489,7 @@ func initDBDriver(driverName string, initConnectionTimeout time.Duration) string
 	case "pgx":
 		// Note: postgreSQL does not have the option `ClientFoundRows`
 		// Config reference: https://www.postgresql.org/docs/current/libpq-connect.html
-		pgxCfg, _, pgxCfgErr := client.CreatePostgreSQLConfig(
+		pgxCfg, _, pgxCfgErr := commonsql.CreatePostgreSQLConfig(
 			common.GetStringConfigWithDefault(postgresUser, "user"),
 			common.GetStringConfigWithDefault(postgresPassword, "password"),
 			common.GetStringConfigWithDefault(postgresHost, "postgresql"),

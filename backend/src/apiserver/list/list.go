@@ -359,12 +359,6 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 	sortByFieldNameWithPrefix := qualifyColumn(o.SortByFieldPrefix, o.SortBySQLColumn, quote)
 	keyFieldNameWithPrefix := qualifyColumn(o.KeyFieldPrefix, o.KeyFieldName, quote)
 
-	// isMetricSort indicates a sort by a run metric, the only case where the sort
-	// value can be a genuine SQL NULL (a run without the selected metric produces
-	// a NULL sort_metric_value). NULL rows are always ordered last, so the cursor
-	// comparison and ORDER BY below add explicit NULL handling only for this case.
-	isMetricSort := o.IsMetricSort()
-
 	// When sorting by a direct field in the listable model (i.e., name in Run or uuid in Pipeline), a sortByFieldPrefix can be specified; when sorting by a field in an array-typed dictionary (i.e., a run metric inside the metrics in Run), a sortByFieldPrefix is not needed.
 	// If next row's value is specified, set those values in the clause.
 	if o.SortByFieldValue != nil && o.KeyFieldValue != nil {
@@ -380,7 +374,9 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 
 		if o.IsDesc {
 			if isStringField && sortValueIsString {
-				// String field: use LOWER() with collation for case-insensitive comparison
+				// String field: use LOWER() with collation for case-insensitive comparison.
+				// Cursor value is non-NULL. NULL rows sort last, so from a non-NULL
+				// cursor we must also include the entire NULL block that follows.
 				sqlBuilder = sqlBuilder.
 					Where(sq.Or{
 						sq.Expr(fmt.Sprintf("%s < %s", sortCol, lowerWithCollation("?")), strVal),
@@ -388,9 +384,10 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 							sq.Expr(fmt.Sprintf("%s = %s", sortCol, lowerWithCollation("?")), strVal),
 							sq.LtOrEq{keyFieldNameWithPrefix: o.KeyFieldValue},
 						},
+						sq.Expr(sortByFieldNameWithPrefix + " IS NULL"),
 					})
 			} else if !isStringField && sortValueIsFloat {
-				// Numeric field: use bind parameter to preserve full float64 precision and prevent injection
+				// Numeric field: use bind parameter to preserve full float64 precision and prevent injection.
 				// Cursor value is non-NULL. NULL rows sort last, so from a non-NULL
 				// cursor we must also include the entire NULL block that follows.
 				cursorClause := sq.Or{
@@ -399,15 +396,15 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 						sq.Expr(sortByFieldNameWithPrefix+" = ?", floatVal),
 						sq.LtOrEq{keyFieldNameWithPrefix: o.KeyFieldValue},
 					},
-				}
-				if isMetricSort {
-					cursorClause = append(cursorClause, sq.Expr(sortByFieldNameWithPrefix+" IS NULL"))
+					sq.Expr(sortByFieldNameWithPrefix + " IS NULL"),
 				}
 				sqlBuilder = sqlBuilder.Where(cursorClause)
 			}
 		} else {
 			if isStringField && sortValueIsString {
-				// String field: use LOWER() with collation for case-insensitive comparison
+				// String field: use LOWER() with collation for case-insensitive comparison.
+				// Cursor value is non-NULL. NULL rows sort last, so from a non-NULL
+				// cursor we must also include the entire NULL block that follows.
 				sqlBuilder = sqlBuilder.
 					Where(sq.Or{
 						sq.Expr(fmt.Sprintf("%s > %s", sortCol, lowerWithCollation("?")), strVal),
@@ -415,9 +412,10 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 							sq.Expr(fmt.Sprintf("%s = %s", sortCol, lowerWithCollation("?")), strVal),
 							sq.GtOrEq{keyFieldNameWithPrefix: o.KeyFieldValue},
 						},
+						sq.Expr(sortByFieldNameWithPrefix + " IS NULL"),
 					})
 			} else if !isStringField && sortValueIsFloat {
-				// Numeric field: use bind parameter to preserve full float64 precision and prevent injection
+				// Numeric field: use bind parameter to preserve full float64 precision and prevent injection.
 				// Cursor value is non-NULL. NULL rows sort last, so from a non-NULL
 				// cursor we must also include the entire NULL block that follows.
 				cursorClause := sq.Or{
@@ -426,9 +424,7 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 						sq.Expr(sortByFieldNameWithPrefix+" = ?", floatVal),
 						sq.GtOrEq{keyFieldNameWithPrefix: o.KeyFieldValue},
 					},
-				}
-				if isMetricSort {
-					cursorClause = append(cursorClause, sq.Expr(sortByFieldNameWithPrefix+" IS NULL"))
+					sq.Expr(sortByFieldNameWithPrefix + " IS NULL"),
 				}
 				sqlBuilder = sqlBuilder.Where(cursorClause)
 			}
@@ -438,6 +434,11 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 		// already been paged through, so advance within the trailing NULL block
 		// using the primary key alone. Direction of the key tie-break follows the
 		// sort direction, matching the non-NULL branches above.
+		//
+		// This branch remains metric-only because Go model structs use value types
+		// (string, int64) and GORM maps SQL NULL to the zero value, so
+		// GetFieldValue cannot distinguish NULL from zero for non-metric fields.
+		// Extending this to all fields would require pointer types in the models.
 		keyCursor := sq.Sqlizer(sq.GtOrEq{keyFieldNameWithPrefix: o.KeyFieldValue})
 		if o.IsDesc {
 			keyCursor = sq.LtOrEq{keyFieldNameWithPrefix: o.KeyFieldValue}
@@ -454,14 +455,13 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 	}
 
 	if o.SortBySQLColumn != "" {
-		// For metric sorts, place NULL values last regardless of direction using a
-		// "(col IS NULL) ASC" leading key. MySQL/PostgreSQL/SQLite all support this
-		// boolean expression in ORDER BY, giving deterministic, cross-dialect NULL
-		// ordering without relying on NULLS LAST (unsupported by MySQL) or on each
-		// database's default NULL placement (which differs between MySQL and PostgreSQL).
-		if isMetricSort {
-			sqlBuilder = sqlBuilder.OrderBy(fmt.Sprintf("(%v IS NULL) ASC", sortByFieldNameWithPrefix))
-		}
+		// Place NULL values last regardless of direction using a "(col IS NULL) ASC"
+		// leading key. MySQL/PostgreSQL/SQLite all support this boolean expression in
+		// ORDER BY, giving deterministic, cross-dialect NULL ordering without relying
+		// on NULLS LAST (unsupported by MySQL) or on each database's default NULL
+		// placement (which differs between MySQL and PostgreSQL). For NOT NULL columns
+		// the expression is a constant 0 and the optimizer can skip it.
+		sqlBuilder = sqlBuilder.OrderBy(fmt.Sprintf("(%v IS NULL) ASC", sortByFieldNameWithPrefix))
 		// Use SortByFieldIsString to decide whether to wrap with LOWER().
 		// Also check runtime value type as fallback for old tokens that lack this field.
 		_, valueIsString := o.SortByFieldValue.(string)
@@ -473,6 +473,45 @@ func (o *Options) AddSortingToSelect(sqlBuilder sq.SelectBuilder, quote func(str
 		}
 	}
 
+	if o.KeyFieldName != "" {
+		sqlBuilder = sqlBuilder.OrderBy(fmt.Sprintf("%v %v", keyFieldNameWithPrefix, order))
+	}
+
+	return sqlBuilder
+}
+
+// AddOrderByToSelect adds only the ORDER BY clauses from the sorting criteria,
+// without cursor WHERE clauses or LIMIT. Use this when the rows have already been
+// paged by a subquery and only need to be re-sorted for the final result set.
+func (o *Options) AddOrderByToSelect(sqlBuilder sq.SelectBuilder, quote func(string) string, collation string) sq.SelectBuilder {
+	if quote == nil {
+		quote = func(s string) string { return s }
+	}
+	lowerWithCollation := func(col string) string {
+		if collation == "" {
+			return fmt.Sprintf("LOWER(%s)", col)
+		}
+		return fmt.Sprintf("LOWER(%s) %s", col, collation)
+	}
+
+	sortByFieldNameWithPrefix := qualifyColumn(o.SortByFieldPrefix, o.SortBySQLColumn, quote)
+	keyFieldNameWithPrefix := qualifyColumn(o.KeyFieldPrefix, o.KeyFieldName, quote)
+
+	order := "ASC"
+	if o.IsDesc {
+		order = "DESC"
+	}
+
+	if o.SortBySQLColumn != "" {
+		sqlBuilder = sqlBuilder.OrderBy(fmt.Sprintf("(%v IS NULL) ASC", sortByFieldNameWithPrefix))
+		_, valueIsString := o.SortByFieldValue.(string)
+		if o.SortByFieldIsString || valueIsString {
+			sortCol := lowerWithCollation(sortByFieldNameWithPrefix)
+			sqlBuilder = sqlBuilder.OrderBy(fmt.Sprintf("%v %v", sortCol, order))
+		} else {
+			sqlBuilder = sqlBuilder.OrderBy(fmt.Sprintf("%v %v", sortByFieldNameWithPrefix, order))
+		}
+	}
 	if o.KeyFieldName != "" {
 		sqlBuilder = sqlBuilder.OrderBy(fmt.Sprintf("%v %v", keyFieldNameWithPrefix, order))
 	}

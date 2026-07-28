@@ -26,6 +26,7 @@ import (
 
 	"github.com/cenkalti/backoff"
 	"github.com/golang/glog"
+	commonsql "github.com/kubeflow/pipelines/backend/src/apiserver/common/sql"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/common/sql/dialect"
 	"github.com/kubeflow/pipelines/backend/src/cache/client"
 	"github.com/kubeflow/pipelines/backend/src/cache/model"
@@ -139,7 +140,7 @@ func initDBDriver(params WhSvrDBParameters, initConnectionTimeout time.Duration)
 		if err != nil {
 			glog.Fatalf("Failed to parse MySQL extra params: %v", err)
 		}
-		mysqlConfig := client.CreateMySQLConfig(
+		mysqlConfig := commonsql.CreateMySQLConfig(
 			params.dbUser,
 			params.dbPwd,
 			params.dbHost,
@@ -208,22 +209,24 @@ func initDBDriver(params WhSvrDBParameters, initConnectionTimeout time.Duration)
 			glog.Fatalf("Failed to parse PostgreSQL extra params: %v", err)
 		}
 		// Connect without target DB first
-		cfgNoDB, _, err := client.CreatePostgreSQLConfig(params.dbUser, params.dbPwd, params.dbHost, "postgres", uint16(port), pgxExtraParams)
+		cfgNoDB, _, err := commonsql.CreatePostgreSQLConfig(params.dbUser, params.dbPwd, params.dbHost, "postgres", uint16(port), pgxExtraParams)
 		if err != nil {
 			glog.Fatalf("Failed to create PostgreSQL config: %v", err)
 		}
-		var db *sql.DB
+		db, err := sql.Open(params.dbDriver, cfgNoDB.ConnString())
+		if err != nil {
+			glog.Fatalf("Failed to open PostgreSQL connection: %v", err)
+		}
 		var operation = func() error {
-			db, err = sql.Open(params.dbDriver, cfgNoDB.ConnString())
-			if err != nil {
-				return err
-			}
 			return db.Ping()
 		}
 		b := backoff.NewExponentialBackOff()
 		b.MaxElapsedTime = initConnectionTimeout
 		err = backoff.Retry(operation, b)
-		util.TerminateIfError(err)
+		if err != nil {
+			db.Close()
+			glog.Fatalf("Failed to ping PostgreSQL: %v", err)
+		}
 
 		// Create database, ignoring "already exists" error
 		pgDialect := dialect.NewDBDialect(params.dbDriver)
@@ -235,7 +238,7 @@ func initDBDriver(params WhSvrDBParameters, initConnectionTimeout time.Duration)
 		db.Close()
 
 		// Return DSN with target DB
-		cfg, _, err := client.CreatePostgreSQLConfig(params.dbUser, params.dbPwd, params.dbHost, params.dbName, uint16(port), pgxExtraParams)
+		cfg, _, err := commonsql.CreatePostgreSQLConfig(params.dbUser, params.dbPwd, params.dbHost, params.dbName, uint16(port), pgxExtraParams)
 		if err != nil {
 			glog.Fatalf("Failed to create PostgreSQL config: %v", err)
 		}

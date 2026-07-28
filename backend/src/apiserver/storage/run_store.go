@@ -206,14 +206,10 @@ func (s *RunStore) buildSelectRunsQuery(selectCount bool, opts *list.Options,
 
 	sqlBuilder := opts.AddFilterToSelect(filteredSelectBuilder, q)
 
-	// If we're not just counting, then also add select columns and perform a left join
-	// to get resource reference information. Pagination and sorting are applied at the outermost level.
 	if !selectCount {
-		sqlBuilder = s.addMetricsResourceReferencesAndTasks(sqlBuilder, opts)
-
 		// Convert metric value (string) to float64 for numeric comparison in SQL, generic for all DBs.
+		// Must happen before building the paging subquery since cursor WHERE uses this value.
 		if opts != nil && opts.IsMetricSort() && opts.GetSortByFieldValue() != nil {
-			// Try to convert to float64 if it's a string
 			if strVal, ok := opts.GetSortByFieldValue().(string); ok {
 				if floatVal, err := strconv.ParseFloat(strVal, 64); err == nil {
 					opts = opts.WithSortByFieldValue(floatVal)
@@ -221,8 +217,12 @@ func (s *RunStore) buildSelectRunsQuery(selectCount bool, opts *list.Options,
 			}
 		}
 
-		sqlBuilder = opts.AddPaginationToSelect(sqlBuilder, q, s.dbDialect.StringCollation())
-		// Note: AddPaginationToSelect already calls AddSortingToSelect internally, so we don't need to call it again
+		// Paginate-then-aggregate: build a lightweight subquery that pages by UUID
+		// with cursor WHERE + ORDER BY + LIMIT, then aggregate refs/tasks/metrics
+		// only for the paged rows.
+		pagedBuilder := s.buildPagedUUIDSubquery(sqlBuilder, opts)
+		sqlBuilder = s.addMetricsResourceReferencesAndTasks(pagedBuilder, opts)
+		sqlBuilder = opts.AddOrderByToSelect(sqlBuilder, q, s.dbDialect.StringCollation())
 	}
 	// Apply correct placeholder format for the final SQL generation
 	if s.dbDialect.Name() == "pgx" {
@@ -270,6 +270,46 @@ func (s *RunStore) GetRun(runId string) (*model.Run, error) {
 		return nil, util.NewResourceNotFoundError("Failed to get run: %s", runId)
 	}
 	return runs[0], nil
+}
+
+// buildPagedUUIDSubquery creates a lightweight subquery that selects only the
+// UUIDs needed for the current page. It applies cursor-based keyset pagination
+// (WHERE + ORDER BY + LIMIT) so that the expensive refs/tasks/metrics
+// aggregation in addMetricsResourceReferencesAndTasks runs only over
+// PageSize+1 rows instead of the entire filtered result set.
+func (s *RunStore) buildPagedUUIDSubquery(filteredBuilder sq.SelectBuilder, opts *list.Options) sq.SelectBuilder {
+	q := s.dbDialect.QuoteIdentifier
+	qb := sq.StatementBuilder.PlaceholderFormat(sq.Question)
+	collation := s.dbDialect.StringCollation()
+
+	if opts != nil && opts.IsMetricSort() {
+		// Metric sort: LEFT JOIN run_metrics to compute sort_metric_value,
+		// then wrap in a subquery so the alias is a real column for WHERE.
+		metricValueExtract := fmt.Sprintf("MAX(CASE WHEN rm.%s=? THEN rm.%s END) AS %s",
+			q("Name"), q("NumberValue"), q(model.MetricSortSQLAlias))
+
+		metricSubQ := qb.
+			Select("filtered."+q("UUID")).
+			Column(sq.Expr(metricValueExtract, opts.SortByFieldName)).
+			FromSelect(filteredBuilder, "filtered").
+			LeftJoin(fmt.Sprintf("%s AS rm ON filtered.%s=rm.%s",
+				q("run_metrics"), q("UUID"), q("RunUUID"))).
+			GroupBy("filtered." + q("UUID"))
+
+		pageBuilder := qb.
+			Select(q("UUID"), q(model.MetricSortSQLAlias)).
+			FromSelect(metricSubQ, "metric_page")
+
+		return opts.AddPaginationToSelect(pageBuilder, q, collation)
+	}
+
+	// Regular sort: select UUID (+ sort column if different from UUID).
+	columns := []string{q("UUID")}
+	if opts.SortBySQLColumn != "" && opts.SortBySQLColumn != "UUID" {
+		columns = append(columns, q(opts.SortBySQLColumn))
+	}
+	pageBuilder := qb.Select(columns...).FromSelect(filteredBuilder, "filtered")
+	return opts.AddPaginationToSelect(pageBuilder, q, collation)
 }
 
 func (s *RunStore) addMetricsResourceReferencesAndTasks(filteredSelectBuilder sq.SelectBuilder, opts *list.Options) sq.SelectBuilder {

@@ -687,7 +687,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:            true,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) < LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField <= ?)) ORDER BY LOWER(SortField) DESC, KeyField DESC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) < LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField <= ?) OR SortField IS NULL) ORDER BY (SortField IS NULL) ASC, LOWER(SortField) DESC, KeyField DESC LIMIT 124",
 			wantArgs: []interface{}{"value", "value", 1111},
 		},
 		{
@@ -704,7 +704,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:            false,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) > LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField >= ?)) ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) > LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField >= ?) OR SortField IS NULL) ORDER BY (SortField IS NULL) ASC, LOWER(SortField) ASC, KeyField ASC LIMIT 124",
 			wantArgs: []interface{}{"value", "value", 1111},
 		},
 		{
@@ -722,7 +722,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					Filter:            f,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) > LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField >= ?)) AND (Name = ?) ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(SortField) > LOWER(?) OR (LOWER(SortField) = LOWER(?) AND KeyField >= ?) OR SortField IS NULL) AND (Name = ?) ORDER BY (SortField IS NULL) ASC, LOWER(SortField) ASC, KeyField ASC LIMIT 124",
 			wantArgs: []interface{}{"value", "value", 1111, "SomeName"},
 		},
 		{
@@ -739,7 +739,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:              true,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable ORDER BY LOWER(SortField) DESC, KeyField DESC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable ORDER BY (SortField IS NULL) ASC, LOWER(SortField) DESC, KeyField DESC LIMIT 124",
 			wantArgs: nil,
 		},
 		{
@@ -762,7 +762,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:              false,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable ORDER BY CreatedAtInSec ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable ORDER BY (CreatedAtInSec IS NULL) ASC, CreatedAtInSec ASC, KeyField ASC LIMIT 124",
 			wantArgs: nil,
 		},
 		// Numeric field, second page (SortByFieldValue is float64, e.g. CreatedAtInSec):
@@ -782,7 +782,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:              false,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (CreatedAtInSec > ? OR (CreatedAtInSec = ? AND KeyField >= ?)) ORDER BY CreatedAtInSec ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (CreatedAtInSec > ? OR (CreatedAtInSec = ? AND KeyField >= ?) OR CreatedAtInSec IS NULL) ORDER BY (CreatedAtInSec IS NULL) ASC, CreatedAtInSec ASC, KeyField ASC LIMIT 124",
 			wantArgs: []interface{}{float64(1234567890), float64(1234567890), "uuid-2"},
 		},
 		{
@@ -798,7 +798,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:            false,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable ORDER BY (SortField IS NULL) ASC, LOWER(SortField) ASC, KeyField ASC LIMIT 124",
 			wantArgs: nil,
 		},
 		{
@@ -815,7 +815,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					Filter:            f,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (Name = ?) ORDER BY LOWER(SortField) ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (Name = ?) ORDER BY (SortField IS NULL) ASC, LOWER(SortField) ASC, KeyField ASC LIMIT 124",
 			wantArgs: []interface{}{"SomeName"},
 		},
 		// Numeric field, second page (SortByFieldValue is float64): bind parameter preserves full precision.
@@ -834,7 +834,7 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:              false,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (MetricValue > ? OR (MetricValue = ? AND KeyField >= ?)) ORDER BY MetricValue ASC, KeyField ASC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (MetricValue > ? OR (MetricValue = ? AND KeyField >= ?) OR MetricValue IS NULL) ORDER BY (MetricValue IS NULL) ASC, MetricValue ASC, KeyField ASC LIMIT 124",
 			wantArgs: []interface{}{float64(0.123456789), float64(0.123456789), "uuid-1"},
 		},
 		{
@@ -852,8 +852,85 @@ func TestAddPaginationAndFilterToSelect(t *testing.T) {
 					IsDesc:              true,
 				},
 			},
-			wantSQL:  "SELECT * FROM MyTable WHERE (MetricValue < ? OR (MetricValue = ? AND KeyField <= ?)) ORDER BY MetricValue DESC, KeyField DESC LIMIT 124",
+			wantSQL:  "SELECT * FROM MyTable WHERE (MetricValue < ? OR (MetricValue = ? AND KeyField <= ?) OR MetricValue IS NULL) ORDER BY (MetricValue IS NULL) ASC, MetricValue DESC, KeyField DESC LIMIT 124",
 			wantArgs: []interface{}{float64(0.123456789), float64(0.123456789), "uuid-1"},
+		},
+		// Non-metric nullable string field, DESC with cursor: NULL handling in both
+		// WHERE and ORDER BY, ensuring cross-dialect consistency for regular fields.
+		{
+			in: &Options{
+				PageSize: 123,
+				token: &token{
+					SortByFieldName:     "FakeName",
+					SortBySQLColumn:     "FakeName",
+					SortByFieldIsString: true,
+					SortByFieldValue:    "some_value",
+					SortByFieldPrefix:   "",
+					KeyFieldName:        "KeyField",
+					KeyFieldValue:       "uuid-3",
+					KeyFieldPrefix:      "",
+					IsDesc:              true,
+				},
+			},
+			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(FakeName) < LOWER(?) OR (LOWER(FakeName) = LOWER(?) AND KeyField <= ?) OR FakeName IS NULL) ORDER BY (FakeName IS NULL) ASC, LOWER(FakeName) DESC, KeyField DESC LIMIT 124",
+			wantArgs: []interface{}{"some_value", "some_value", "uuid-3"},
+		},
+		// Non-metric nullable string field, ASC with cursor.
+		{
+			in: &Options{
+				PageSize: 123,
+				token: &token{
+					SortByFieldName:     "FakeName",
+					SortBySQLColumn:     "FakeName",
+					SortByFieldIsString: true,
+					SortByFieldValue:    "some_value",
+					SortByFieldPrefix:   "",
+					KeyFieldName:        "KeyField",
+					KeyFieldValue:       "uuid-3",
+					KeyFieldPrefix:      "",
+					IsDesc:              false,
+				},
+			},
+			wantSQL:  "SELECT * FROM MyTable WHERE (LOWER(FakeName) > LOWER(?) OR (LOWER(FakeName) = LOWER(?) AND KeyField >= ?) OR FakeName IS NULL) ORDER BY (FakeName IS NULL) ASC, LOWER(FakeName) ASC, KeyField ASC LIMIT 124",
+			wantArgs: []interface{}{"some_value", "some_value", "uuid-3"},
+		},
+		// Non-metric nullable numeric field, DESC with cursor.
+		{
+			in: &Options{
+				PageSize: 123,
+				token: &token{
+					SortByFieldName:     "CreatedAtInSec",
+					SortBySQLColumn:     "CreatedAtInSec",
+					SortByFieldIsString: false,
+					SortByFieldValue:    float64(1000),
+					SortByFieldPrefix:   "",
+					KeyFieldName:        "KeyField",
+					KeyFieldValue:       "uuid-4",
+					KeyFieldPrefix:      "",
+					IsDesc:              true,
+				},
+			},
+			wantSQL:  "SELECT * FROM MyTable WHERE (CreatedAtInSec < ? OR (CreatedAtInSec = ? AND KeyField <= ?) OR CreatedAtInSec IS NULL) ORDER BY (CreatedAtInSec IS NULL) ASC, CreatedAtInSec DESC, KeyField DESC LIMIT 124",
+			wantArgs: []interface{}{float64(1000), float64(1000), "uuid-4"},
+		},
+		// Non-metric nullable numeric field, ASC with cursor.
+		{
+			in: &Options{
+				PageSize: 123,
+				token: &token{
+					SortByFieldName:     "CreatedAtInSec",
+					SortBySQLColumn:     "CreatedAtInSec",
+					SortByFieldIsString: false,
+					SortByFieldValue:    float64(1000),
+					SortByFieldPrefix:   "",
+					KeyFieldName:        "KeyField",
+					KeyFieldValue:       "uuid-4",
+					KeyFieldPrefix:      "",
+					IsDesc:              false,
+				},
+			},
+			wantSQL:  "SELECT * FROM MyTable WHERE (CreatedAtInSec > ? OR (CreatedAtInSec = ? AND KeyField >= ?) OR CreatedAtInSec IS NULL) ORDER BY (CreatedAtInSec IS NULL) ASC, CreatedAtInSec ASC, KeyField ASC LIMIT 124",
+			wantArgs: []interface{}{float64(1000), float64(1000), "uuid-4"},
 		},
 		// Metric sort, non-NULL cursor, ASC (case A): NULL rows sort last, so the
 		// cursor also pulls in the trailing NULL block via "sort_metric_value IS NULL".
